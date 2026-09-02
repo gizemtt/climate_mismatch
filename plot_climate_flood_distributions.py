@@ -16,6 +16,9 @@ climate representation. Positive flood
 depths are rounded upward to integer feet before all metrics are calculated.
 For SSP5-8.5 response uncertainty, mean and median use q1/q2/q3 response
 weights of 0.25/0.50/0.25 after conditioning on positive flood depth.
+
+run:
+python plot_climate_flood_distributions.py
 """
 
 from __future__ import annotations
