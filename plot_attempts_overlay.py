@@ -11,6 +11,7 @@ from typing import Dict, List
 
 import matplotlib.pyplot as plt
 import pandas as pd
+from matplotlib.lines import Line2D
 from mpl_toolkits.axes_grid1.inset_locator import inset_axes, mark_inset
 
 
@@ -390,12 +391,25 @@ def make_combined_figure(
             if label not in labels:
                 handles.append(handle)
                 labels.append(label)
+    handles.append(
+        Line2D(
+            [0],
+            [0],
+            marker="o",
+            linestyle="none",
+            markerfacecolor="none",
+            markeredgecolor="#C00000",
+            markeredgewidth=1.2,
+            markersize=7,
+        )
+    )
+    labels.append("Knee-point policy")
     fig.legend(
         handles,
         labels,
         loc="upper center",
         bbox_to_anchor=(0.5, 1.015),
-        ncol=min(3, len(labels)),
+        ncol=min(4, len(labels)),
         frameon=False,
         handletextpad=0.45,
         columnspacing=1.4,
@@ -463,9 +477,3 @@ def main() -> None:
 
 if __name__ == "__main__":
     main()
-
-
-# Example:
-# python plot_attempts_overlay.py \
-#   --budgets "50000000,300000000,600000000" \
-#   --scenario_sets "ssp245,main,perc"
