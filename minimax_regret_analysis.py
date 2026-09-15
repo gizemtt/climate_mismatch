@@ -48,6 +48,9 @@ The optional matched-frontier benchmarks are solved only AFTER y is fixed.
 fixed_benchmarks.csv stores L, b and source-row metadata together per climate.
 All solves share --mip_gap (default 1e-5, i.e. 0.001% relative gap); only the
 robust minimax-regret solve has a time limit.
+
+run:
+python minimax_regret_analysis.py --K 110 --write_lp
 """
 from __future__ import annotations
 import argparse, csv, json, math, time
