@@ -7,12 +7,21 @@ import re
 from pathlib import Path
 from typing import Dict, List, Optional
 
+import matplotlib.pyplot as plt
+
 
 CLIMATES = ("ssp245", "main", "perc")
 DISPLAY_NAMES = {
     "ssp245": "SSP2-4.5 median",
     "main": "SSP5-8.5 median",
     "perc": "SSP5-8.5 uncertainty",
+}
+
+PLOT_MARKERS = {
+    "ssp245": "o",
+    "main": "s",
+    "perc": "^",
+    "robust": "D",
 }
 
 
@@ -36,17 +45,6 @@ def as_float(value, name: str) -> float:
 def parse_budget_dir(path: Path) -> Optional[int]:
     m = re.fullmatch(r"B(\d+)", path.name)
     return int(m.group(1)) if m else None
-
-
-def budget_label(budget: int) -> str:
-    millions = budget / 1_000_000
-    if math.isclose(millions, round(millions), abs_tol=1e-12):
-        return rf"\${int(round(millions))}M"
-    return rf"\${millions:g}M"
-
-
-def rounded_millions(value: float) -> str:
-    return f"{value / 1_000_000:.0f}"
 
 
 def close_eps(a: float, b: float) -> bool:
@@ -82,8 +80,6 @@ def climate_performance_path(robust_budget_dir: Path, budget: int) -> Path:
         if path.is_file():
             return path
 
-    # Last-resort compatibility with future prefixes, while avoiding silent
-    # selection if more than one candidate exists.
     matches = sorted(robust_budget_dir.glob("*_climate_performance.csv"))
     if len(matches) == 1:
         return matches[0]
@@ -124,7 +120,7 @@ def selected_source_eps(robust_budget_dir: Path, budget: int) -> Dict[str, float
     """
     Read the source epsilon values actually used by the robust run.
     This prevents stale cross_eval files from a previous representative
-    portfolio from being mixed into the V(B) calculation.
+    portfolio from being mixed into the value-of-robustness calculation.
     """
     rows = read_csv(robust_budget_dir / "selection_log.csv")
     selected: Dict[str, float] = {}
@@ -172,7 +168,14 @@ def climate_specific_worst_cases(
     """
     budget_rows = []
     for row in cross_rows:
-        row_budget = int(round(as_float(row.get("Budget", row.get("budget")), "cross-eval budget")))
+        row_budget = int(
+            round(
+                as_float(
+                    row.get("Budget", row.get("budget")),
+                    "cross-eval budget",
+                )
+            )
+        )
         if row_budget == budget:
             budget_rows.append(row)
 
@@ -183,7 +186,8 @@ def climate_specific_worst_cases(
         eps = selected_eps[source]
 
         matched = [
-            r for r in budget_rows
+            r
+            for r in budget_rows
             if r.get("source_scenario", "").strip() == source
             and r.get("target_scenario", "").strip() in expected_targets
             and close_eps(as_float(r.get("source_eps"), "source_eps"), eps)
@@ -203,7 +207,6 @@ def climate_specific_worst_cases(
             benchmark_f1 = as_float(row.get("benchmark_f1"), "benchmark_f1")
             regret = fixed_f1 - benchmark_f1
 
-            # Allow only negligible numerical negativity.
             tol = 1e-7 * max(1.0, abs(fixed_f1), abs(benchmark_f1))
             if regret < -tol:
                 raise ValueError(
@@ -226,6 +229,7 @@ def robust_worst_case(robust_budget_dir: Path, budget: int) -> float:
         climate = row.get("climate", "").strip()
         if climate not in CLIMATES:
             continue
+
         value = row.get("matched_regret_estimate")
         if value in (None, ""):
             raise ValueError(
@@ -273,72 +277,37 @@ def compute_rows(
         robust_dir = robust_output_dir / f"B{B}"
         eps = selected_source_eps(robust_dir, B)
         reference_worst = climate_specific_worst_cases(cross_rows, B, eps)
+
         best_reference = min(reference_worst.values())
+        best_reference_sources = [
+            climate
+            for climate, value in reference_worst.items()
+            if math.isclose(value, best_reference, rel_tol=0.0, abs_tol=1e-6)
+        ]
+
         robust_worst = robust_worst_case(robust_dir, B)
         value = best_reference - robust_worst
 
-        result.append({
-            "Budget": B,
-            "ssp245_worst_regret": reference_worst["ssp245"],
-            "main_worst_regret": reference_worst["main"],
-            "perc_worst_regret": reference_worst["perc"],
-            "best_reference_worst_regret": best_reference,
-            "robust_worst_regret": robust_worst,
-            "V_B": value,
-            "V_B_over_B_pct": 100.0 * value / B,
-        })
-
-    return result
-
-
-def latex_table(records: List[dict]) -> str:
-    body = []
-    for r in records:
-        body.append(
-            f"{budget_label(int(r['Budget']))} "
-            f"& {rounded_millions(r['ssp245_worst_regret'])} "
-            f"& {rounded_millions(r['main_worst_regret'])} "
-            f"& {rounded_millions(r['perc_worst_regret'])} "
-            f"& {rounded_millions(r['best_reference_worst_regret'])} "
-            f"& {rounded_millions(r['robust_worst_regret'])} "
-            f"& {rounded_millions(r['V_B'])} "
-            f"& {r['V_B_over_B_pct']:.0f}\\% \\\\"
+        result.append(
+            {
+                "Budget": B,
+                "ssp245_worst_regret": reference_worst["ssp245"],
+                "main_worst_regret": reference_worst["main"],
+                "perc_worst_regret": reference_worst["perc"],
+                "best_reference_source": ";".join(best_reference_sources),
+                "best_reference_worst_regret": best_reference,
+                "robust_worst_regret": robust_worst,
+                "V_B": value,
+                "V_B_over_best_reference_pct": (
+                    100.0 * value / best_reference
+                    if best_reference > 0.0
+                    else None
+                ),
+                "V_B_over_B_pct": 100.0 * value / B,
+            }
         )
 
-    rows_text = "\n".join(body)
-
-    return rf"""\begin{{table}}[!t]
-\centering
-\small
-\setlength{{\tabcolsep}}{{4pt}}
-\caption{{\textbf{{Incremental value of explicit climate-robust planning.}}
-For each mitigation budget $B$, the table reports the worst-case matched-frontier
-regret of each climate-specific reference portfolio across the three climate
-representations. The best reference is the climate-specific portfolio with the
-smallest worst-case regret. The value of robustness, \(V(B)\), is the reduction
-in worst-case regret obtained by the climate-robust portfolio relative to this
-best climate-specific reference. Regret values are reported in millions of
-dollars.}}
-\label{{tbl:value_of_robustness}}
-
-\resizebox{{\textwidth}}{{!}}{{%
-\begin{{tabular}}{{lrrrrrrr}}
-\toprule
-Budget
-& SSP2-4.5 median
-& SSP5-8.5 median
-& SSP5-8.5 uncertainty
-& Best reference
-& Robust portfolio
-& \(V(B)\)
-& \(V(B)/B\) \\
-\midrule
-{rows_text}
-\bottomrule
-\end{{tabular}}%
-}}
-\end{{table}}
-"""
+    return result
 
 
 def write_audit_csv(path: Path, records: List[dict]) -> None:
@@ -349,11 +318,189 @@ def write_audit_csv(path: Path, records: List[dict]) -> None:
         writer.writerows(records)
 
 
+def annotate_reduction(
+    ax,
+    x: float,
+    y_best: float,
+    y_robust: float,
+    reduction: float,
+) -> None:
+    """
+    Draw a vertical connector between the robust point and the best
+    climate-specific reference point and annotate the absolute reduction.
+
+    Inputs are already in millions of dollars.
+    """
+    ax.annotate(
+        "",
+        xy=(x, y_best),
+        xytext=(x, y_robust),
+        arrowprops={
+            "arrowstyle": "<->",
+            "linewidth": 1.0,
+            "shrinkA": 2,
+            "shrinkB": 2,
+        },
+    )
+
+    midpoint = 0.5 * (y_best + y_robust)
+    ax.annotate(
+        rf"\${reduction:.0f}M",
+        xy=(x, midpoint),
+        xytext=(5, 0),
+        textcoords="offset points",
+        ha="left",
+        va="center",
+        fontsize=8,
+    )
+
+
+def make_two_panel_figure(records: List[dict], output_path: Path) -> None:
+    """
+    Create the two-panel value-of-robustness figure.
+
+    Panel A:
+      - three climate-specific worst-case-regret series;
+      - climate-robust worst-case-regret series;
+      - a vertical connector from the robust point to the best climate-specific
+        reference at each budget, annotated with the absolute regret reduction.
+
+    Panel B:
+      - regret reduction relative to the best climate-specific reference;
+      - regret reduction relative to the mitigation budget.
+    """
+    records = sorted(records, key=lambda r: int(r["Budget"]))
+    budgets_m = [r["Budget"] / 1_000_000 for r in records]
+
+    fig, (ax_a, ax_b) = plt.subplots(
+        1,
+        2,
+        figsize=(12.5, 5.2),
+        constrained_layout=True,
+    )
+
+    # Panel A
+    for climate in CLIMATES:
+        ys = [r[f"{climate}_worst_regret"] / 1_000_000 for r in records]
+        ax_a.plot(
+            budgets_m,
+            ys,
+            marker=PLOT_MARKERS[climate],
+            linewidth=1.8,
+            markersize=5,
+            label=DISPLAY_NAMES[climate],
+        )
+
+    robust_ys = [r["robust_worst_regret"] / 1_000_000 for r in records]
+    ax_a.plot(
+        budgets_m,
+        robust_ys,
+        marker=PLOT_MARKERS["robust"],
+        linewidth=2.2,
+        markersize=5.5,
+        label="Climate-robust",
+    )
+
+    for r in records:
+        x = r["Budget"] / 1_000_000
+        y_best = r["best_reference_worst_regret"] / 1_000_000
+        y_robust = r["robust_worst_regret"] / 1_000_000
+        reduction = r["V_B"] / 1_000_000
+        annotate_reduction(ax_a, x, y_best, y_robust, reduction)
+
+    ax_a.set_xlabel("Mitigation budget (million $)")
+    ax_a.set_ylabel("Worst-case matched-frontier regret (million $)")
+    ax_a.set_ylim(bottom=0)
+    ax_a.set_xticks(budgets_m)
+    ax_a.grid(axis="y", alpha=0.25)
+    ax_a.legend(frameon=False, fontsize=8)
+    ax_a.text(
+        -0.12,
+        1.04,
+        "A",
+        transform=ax_a.transAxes,
+        fontsize=12,
+        fontweight="bold",
+        va="top",
+    )
+
+    # Panel B
+    pct_best = [r["V_B_over_best_reference_pct"] for r in records]
+    pct_budget = [r["V_B_over_B_pct"] for r in records]
+
+    ax_b.plot(
+        budgets_m,
+        pct_best,
+        marker="o",
+        linewidth=1.8,
+        markersize=5,
+        label="Reduction relative to best reference",
+    )
+    ax_b.plot(
+        budgets_m,
+        pct_budget,
+        marker="s",
+        linewidth=1.8,
+        markersize=5,
+        label="Reduction relative to budget",
+    )
+
+    for x, y in zip(budgets_m, pct_best):
+        if y is not None and math.isfinite(y):
+            ax_b.annotate(
+                f"{y:.1f}%",
+                xy=(x, y),
+                xytext=(0, 7),
+                textcoords="offset points",
+                ha="center",
+                va="bottom",
+                fontsize=8,
+            )
+
+    for x, y in zip(budgets_m, pct_budget):
+        if y is not None and math.isfinite(y):
+            ax_b.annotate(
+                f"{y:.1f}%",
+                xy=(x, y),
+                xytext=(0, 7),
+                textcoords="offset points",
+                ha="center",
+                va="bottom",
+                fontsize=8,
+            )
+
+    ax_b.set_xlabel("Mitigation budget (million $)")
+    ax_b.set_ylabel("Regret reduction (%)")
+    ax_b.set_ylim(bottom=0)
+    ax_b.set_xticks(budgets_m)
+    ax_b.grid(axis="y", alpha=0.25)
+    ax_b.legend(frameon=False, fontsize=8)
+    ax_b.text(
+        -0.12,
+        1.04,
+        "B",
+        transform=ax_b.transAxes,
+        fontsize=12,
+        fontweight="bold",
+        va="top",
+    )
+
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    save_kwargs = {"bbox_inches": "tight"}
+
+    if output_path.suffix.lower() in {".png", ".jpg", ".jpeg", ".tif", ".tiff"}:
+        save_kwargs["dpi"] = 300
+
+    fig.savefig(output_path, **save_kwargs)
+    plt.close(fig)
+
+
 def main() -> None:
     p = argparse.ArgumentParser(
         description=(
-            "Compute V(B) from cross-climate matched-frontier evaluations and "
-            "climate-robust matched-frontier evaluations, then write the LaTeX table."
+            "Compute the incremental value of climate-robust planning from "
+            "cross-climate matched-frontier evaluations and robust "
+            "matched-frontier evaluations. Writes a CSV and a two-panel figure."
         )
     )
     p.add_argument("--base_output_dir", default="output")
@@ -368,21 +515,24 @@ def main() -> None:
         help="Default: <base_output_dir>/minimax_regret_fixed_reference",
     )
     p.add_argument(
-        "--output_tex",
-        default=None,
-        help="Default: <base_output_dir>/value_of_robustness_table.tex",
-    )
-    p.add_argument(
         "--output_csv",
         default=None,
-        help="Default: <base_output_dir>/value_of_robustness_table.csv",
+        help="Default: <base_output_dir>/value_of_robustness.csv",
+    )
+    p.add_argument(
+        "--output_figure",
+        default=None,
+        help="Default: <base_output_dir>/value_of_robustness_two_panel.png",
     )
     p.add_argument(
         "--budgets",
         nargs="+",
         type=int,
         default=None,
-        help="Optional budget filter, e.g. --budgets 50000000 200000000 300000000",
+        help=(
+            "Optional budget filter, e.g. "
+            "--budgets 50000000 200000000 300000000 400000000 600000000"
+        ),
     )
     args = p.parse_args()
 
@@ -397,35 +547,25 @@ def main() -> None:
         if args.robust_output_dir
         else base / "minimax_regret_fixed_reference"
     )
-    output_tex = (
-        Path(args.output_tex)
-        if args.output_tex
-        else base / "value_of_robustness_table.tex"
-    )
     output_csv = (
         Path(args.output_csv)
         if args.output_csv
-        else base / "value_of_robustness_table.csv"
+        else base / "value_of_robustness.csv"
+    )
+    output_figure = (
+        Path(args.output_figure)
+        if args.output_figure
+        else base / "value_of_robustness_two_panel.png"
     )
     requested = set(args.budgets) if args.budgets else None
 
     records = compute_rows(cross_eval_csv, robust_output_dir, requested)
-    tex = latex_table(records)
-
-    output_tex.parent.mkdir(parents=True, exist_ok=True)
-    output_tex.write_text(tex, encoding="utf-8")
     write_audit_csv(output_csv, records)
+    make_two_panel_figure(records, output_figure)
 
-    print(tex)
-    print(f"\n[SAVED] {output_tex}")
     print(f"[SAVED] {output_csv}")
+    print(f"[SAVED] {output_figure}")
 
 
 if __name__ == "__main__":
     main()
-
-
-'''
-python generate_value_of_robustness_table.py
-python generate_value_of_robustness_table.py --budgets 200000000 400000000
-'''
