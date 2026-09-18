@@ -411,9 +411,10 @@ def run_one(
     write_csv(out_csv, [row], fieldnames=list(row.keys()))
 
     print(f"[DONE] fixed_f1={fixed_f1:,.6f}, fixed_f2={fixed_f2:,.6f}")
+    regret_str = f"{regret_pct:.4f}%" if regret_pct is not None else "NA"
     print(
         f"[BENCHMARK] benchmark_f1={benchmark_f1:,.6f}, "
-        f"benchmark_f2={benchmark_f2:,.6f}, regret={regret_pct:.4f}%"
+        f"benchmark_f2={benchmark_f2:,.6f}, regret={regret_str}"
     )
     print(f"[SAVED] {out_csv}")
 
