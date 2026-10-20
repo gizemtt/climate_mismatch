@@ -17,7 +17,6 @@ P25/P50/P75 are climate-response percentiles, not flood-depth quantiles.
 The SSP5-8.5 median/P50 is shown once and included in the uncertainty bracket.
 
 run: python plot_protection_flooddepth.py --detail-max 16 --compression 4
-python plot_protection_flooddepth.py --compression 4 --all-events-compression 10
 """
 from __future__ import annotations
 
@@ -242,15 +241,15 @@ def draw_protection_panel(
         ax.barh(
             levels[present], 2 * half_widths[present],
             left=x - half_widths[present], height=0.82,
-            color=color, alpha=0.58, edgecolor="white", linewidth=0.35,
+            color=color, alpha=0.90, edgecolor="white", linewidth=0.35,
             zorder=2,
         )
         ax.scatter(
-            x, np.median(values), s=72, marker="o", color=color,
+            x, np.median(values), s=125, marker="o", color=color,
             edgecolor="white", linewidth=0.75, zorder=4,
         )
         ax.scatter(
-            x, np.mean(values), s=72, marker="D", facecolor="white",
+            x, np.mean(values), s=125, marker="D", facecolor="white",
             edgecolor=color, linewidth=1.8, zorder=5,
         )
 
@@ -261,11 +260,11 @@ def draw_protection_panel(
     ]
     ax.set_xlim(-0.55, 2.55)
     ax.set_ylim(0, nice_upper_limit(np.concatenate(nonempty), axis_buffer))
-    ax.set_xticks(x_positions, labels, fontsize=16)
-    ax.set_ylabel("Required protection depth (ft)", fontsize=16)
+    ax.set_xticks(x_positions, labels, fontsize=22)
+    ax.set_ylabel("Required protection depth (ft)", fontsize=24)
     ax.grid(axis="y", color=GRID_COLOR, linestyle=(0, (2, 3)), linewidth=0.8)
     ax.set_axisbelow(True)
-    ax.tick_params(axis="y", labelsize=16, color="#777777")
+    ax.tick_params(axis="y", labelsize=22, color="#777777")
     ax.tick_params(axis="x", length=0)
     for side in ("top", "right", "left"):
         ax.spines[side].set_visible(False)
@@ -308,7 +307,7 @@ def draw_violins(ax, distributions):
     for x, (values, color) in enumerate(zip(distributions, VIOLIN_COLORS)):
         if not len(values):
             ax.text(x, .04, 'No flood', rotation=90, ha='center',
-                    transform=ax.get_xaxis_transform(), fontsize=16)
+                    transform=ax.get_xaxis_transform(), fontsize=22)
             continue
         # Matplotlib's KDE cannot represent a single-valued distribution.
         if len(np.unique(values)) > 1:
@@ -331,7 +330,7 @@ def draw_violins(ax, distributions):
                    edgecolor='#202020', linewidth=1.1, zorder=6)
     ax.set_xlim(-.6, 3.6)
     ax.set_xticks(range(4), ['SSP2-4.5 median', 'SSP5-8.5 median',
-                            'SSP5-8.5 P25', 'SSP5-8.5 P75'], fontsize=16)
+                            'SSP5-8.5 P25', 'SSP5-8.5 P75'], fontsize=22)
     ax.grid(axis='y', color=GRID_COLOR, linestyle=(0, (2, 3)), linewidth=.7)
     ax.set_axisbelow(True)
     ax.tick_params(axis='x', length=0)
@@ -358,8 +357,8 @@ def make_figure(depths, protection, detail_max=16., compression=4., axis_buffer=
     def inverse(y):
         y = np.asarray(y)
         return np.where(y <= detail_max, y, detail_max + (y - detail_max) * compression)
-    fig = plt.figure(figsize=(17.5, 9.3))
-    gs = fig.add_gridspec(1, 4, width_ratios=[1, 1, 1, 2.85], wspace=.43,
+    fig = plt.figure(figsize=(17.5, 10.5))
+    gs = fig.add_gridspec(1, 4, width_ratios=[1, 1, 1, 3.4], wspace=.48,
                           left=.055, right=.985, bottom=.34, top=.89)
     for col, storm in enumerate(STORMS):
         ax = fig.add_subplot(gs[0, col])
@@ -373,16 +372,16 @@ def make_figure(depths, protection, detail_max=16., compression=4., axis_buffer=
         ticks = np.unique(np.r_[low_ticks, detail_max, high_ticks, full_max])
         ax.set_yticks(ticks, [f'{t:g}' for t in ticks])
         ax.minorticks_off()
-        ax.tick_params(axis='x', labelsize=16)
-        ax.tick_params(axis='y', labelsize=16, color='#777777')
+        ax.tick_params(axis='x', labelsize=22)
+        ax.tick_params(axis='y', labelsize=22, color='#777777')
         for label in ax.get_xticklabels():
             label.set_rotation(90)
             label.set_horizontalalignment('center')
             label.set_verticalalignment('top')
-        ax.set_title(f'{storm} ({STORM_YEARS[storm]})', fontsize=16, pad=12)
+        ax.set_title(f'{storm} ({STORM_YEARS[storm]})', fontsize=22, pad=12)
         if col == 0:
-            ax.set_ylabel('Flood depth (ft)', fontsize=16)
-            ax.text(-.20, 1.08, 'A', transform=ax.transAxes, fontsize=20, fontweight='bold')
+            ax.set_ylabel('Flood depth (ft)', fontsize=24)
+            ax.text(-.20, 1.08, 'A', transform=ax.transAxes, fontsize=26, fontweight='bold')
         ax.axhspan(detail_max, full_max, color='#eeeeee', alpha=.5, zorder=0)
         ax.axhline(detail_max, color='#777777', linestyle='--', linewidth=1)
         ax.text(.97, detail_max + .7 * compression, f'{compression:g}×\ncompressed',
@@ -395,31 +394,30 @@ def make_figure(depths, protection, detail_max=16., compression=4., axis_buffer=
         trans = ax.get_xaxis_transform()
         ax.plot([.65, .65, 3.35, 3.35], [y+.015, y, y, y+.015],
                 transform=trans, clip_on=False, color='#7B3294', lw=1.2)
-        ax.text(2., y-.025, 'SSP5-8.5\nresponse uncertainty', transform=trans,
-                ha='center', va='top', color='#542788', fontsize=16)
+        ax.text(2., y-.025, 'SSP5-8.5\nresponse\nuncertainty', transform=trans,
+                ha='center', va='top', color='#542788', fontsize=22)
     axc = fig.add_subplot(gs[0, 3])
     draw_protection_panel(axc, protection, axis_buffer)
-    axc.text(-.08, 1.08, 'B', transform=axc.transAxes, fontsize=20, fontweight='bold')
+    axc.text(-.08, 1.08, 'B', transform=axc.transAxes, fontsize=26, fontweight='bold')
     stats = [Line2D([0], [0], marker='o', color='none', markerfacecolor='#555555',
-                    markeredgecolor='white', markersize=8, label='Median'),
+                    markeredgecolor='white', markersize=11, label='Median'),
              Line2D([0], [0], marker='D', color='none', markerfacecolor='white',
-                    markeredgecolor='#202020', markersize=7, label='Mean')]
+                    markeredgecolor='#202020', markersize=10, label='Mean')]
     fig.canvas.draw()
     label_bottom = min(t.get_window_extent(fig.canvas.get_renderer()).y0
                        for t in axc.get_xticklabels())
     y = axc.transAxes.inverted().transform((0, label_bottom))[1] - .04
     axc.legend(handles=stats, loc='upper center', bbox_to_anchor=(.5, y),
-               borderaxespad=0, ncol=2, frameon=False, fontsize=16)
+               borderaxespad=0, ncol=2, frameon=False, fontsize=22)
     return fig
 
 
 def make_all_storms_figure(loaded, axis_buffer=.04, detail_max=16., compression=10.):
-    """A: horizontal depth violins; B: exposed-facility counts per component.
+    """Supplementary figure sized for a full-width, single-page manuscript figure.
 
-    Depths are rounded up as in the detailed figure. Each distribution and
-    count uses finite, positive depths only. P25/P75 remain separate; the
-    SSP5-8.5 median also represents P50 of response uncertainty.
-    Panel A compresses depths above detail_max; Panel B compresses counts above 30. Same-year events follow STORM_YEARS order.
+    Physical dimensions are close to the eventual LaTeX print dimensions, so
+    labels retain their intended font size instead of being reduced ~50%.
+    The 10x piecewise compression and underlying observations are unchanged.
     """
     if not np.isfinite(detail_max) or detail_max <= 0:
         raise ValueError('detail-max must be finite and positive.')
@@ -432,22 +430,26 @@ def make_all_storms_figure(loaded, axis_buffer=.04, detail_max=16., compression=
     within_year = {storm: i for i, storm in enumerate(STORM_YEARS)}
     storms = sorted(storms, key=lambda storm: (-STORM_YEARS[storm], within_year[storm]))
     depths = selected_depths([d for d, _ in loaded], [c for _, c in loaded], storms)
+
+    # At width=\textwidth (roughly 7--7.25 in), these fonts stay 8--10 pt.
+    # Keep height below ~8 in to leave room for the long supplementary caption.
     fig, (axa, axb) = plt.subplots(
-        1, 2, figsize=(15, max(7, .64 * len(storms) + 2.2)), sharey=True,
-        gridspec_kw={'width_ratios': [1.65, 1], 'wspace': .09})
-    fig.subplots_adjust(left=.19, right=.98, bottom=.06, top=.90)
+        1, 2, figsize=(7.15, 7.65), sharey=True,
+        gridspec_kw={'width_ratios': [1.58, 1], 'wspace': .105})
+    fig.subplots_adjust(left=.205, right=.975, bottom=.105, top=.895)
     offsets = (-.30, -.10, .10, .30)
     all_values = [v for arrays in depths.values() for v in arrays if len(v)]
-    xmax = max(1., nice_upper_limit(np.concatenate(all_values), axis_buffer)) if all_values else 1.
+    xmax = max(50., nice_upper_limit(np.concatenate(all_values), axis_buffer)) if all_values else 50.
     max_count = max((len(v) for arrays in depths.values() for v in arrays), default=0)
+
     for row, storm in enumerate(storms):
         for ax in (axa, axb):
             if row % 2 == 0:
                 ax.axhspan(row-.5, row+.5, color='#f5f5f5', zorder=0)
         for offset, values, color in zip(offsets, depths[storm], VIOLIN_COLORS):
             y = row + offset
-            axb.scatter(len(values), y, s=33, color=color, edgecolor='white',
-                        linewidth=.45, zorder=4, clip_on=False)
+            axb.scatter(len(values), y, s=12, color=color, edgecolor='white',
+                        linewidth=.25, zorder=4, clip_on=False)
             if not len(values):
                 continue
             if len(np.unique(values)) > 1:
@@ -458,85 +460,101 @@ def make_all_storms_figure(loaded, axis_buffer=.04, detail_max=16., compression=
                 for body in parts['bodies']:
                     body.set_facecolor(color)
                     body.set_edgecolor(color)
-                    body.set_alpha(.65)
-                    body.set_linewidth(.6)
+                    body.set_alpha(.72)
+                    body.set_linewidth(.40)
             else:
-                axa.vlines(values[0], y-.075, y+.075, color=color, lw=2)
-            axa.hlines(y, values.min(), values.max(), color=color, lw=.6, zorder=3)
-            axa.scatter(np.median(values), y-.025, s=20, color=color,
-                        edgecolor='white', linewidth=.5, zorder=4)
-            axa.scatter(np.mean(values), y+.025, s=22, marker='D',
-                        facecolor='white', edgecolor=color, linewidth=.9, zorder=5)
+                axa.vlines(values[0], y-.075, y+.075, color=color, lw=1.2)
+            axa.hlines(y, values.min(), values.max(), color=color, lw=.47, zorder=3)
+            axa.scatter(np.median(values), y-.025, s=11, color=color,
+                        edgecolor='white', linewidth=.36, zorder=4)
+            axa.scatter(np.mean(values), y+.025, s=12, marker='D',
+                        facecolor='white', edgecolor=color, linewidth=.65, zorder=5)
+
     axa.set_yticks(range(len(storms)),
-                  [f'{storm} ({STORM_YEARS[storm]})' for storm in storms], fontsize=16)
+                   [f'{storm} ({STORM_YEARS[storm]})' for storm in storms],
+                   fontsize=8.15)
     axa.set_ylim(len(storms)-.5, -.5)
-    xmax = max(50., xmax)
+
     def forward(x):
         x = np.asarray(x)
         return np.where(x <= detail_max, x, detail_max + (x-detail_max)/compression)
+
     def inverse(x):
         x = np.asarray(x)
         return np.where(x <= detail_max, x, detail_max + (x-detail_max)*compression)
+
     axa.set_xscale('function', functions=(forward, inverse))
     axa.set_xlim(0, xmax)
-    low_step = 2. if detail_max <= 20 else 5.
-    ticks = np.unique(np.r_[np.arange(0, min(detail_max, xmax), low_step),
-                            detail_max if detail_max < xmax else xmax,
-                            np.arange(np.ceil((detail_max+6)/10)*10, xmax, 10.), xmax])
-    axa.set_xticks(ticks, [f'{v:g}' for v in ticks])
+    # Sparse major ticks are essential after compression; dense ticks overlap.
+    depth_ticks = np.arange(0, detail_max, 4 if detail_max <= 20 else 5, dtype=float)
+    depth_ticks = np.r_[depth_ticks, detail_max]
+    if xmax > detail_max + 15:
+        depth_ticks = np.r_[depth_ticks, xmax]
+    axa.set_xticks(depth_ticks, [f'{v:g}' for v in depth_ticks])
     axa.minorticks_off()
     if detail_max < xmax:
         axa.axvspan(detail_max, xmax, color='#e5e5e5', alpha=.35, zorder=1)
-        axa.axvline(detail_max, color='#777777', linestyle='--', linewidth=1)
-        axa.text(.98, .012, f'{compression:g}×\ncompressed',
+        axa.axvline(detail_max, color='#777777', linestyle='--', linewidth=.75)
+        axa.text(.985, .012, f'{compression:g}×\ncompressed',
                  transform=axa.transAxes, ha='right', va='bottom',
-                 fontsize=16, color='#555555')
-    count_max = nice_upper_limit(np.array([max_count]), max(.06, axis_buffer))
+                 fontsize=7.3, color='#555555', zorder=10,
+                 bbox={'facecolor': 'white', 'edgecolor': 'none', 'alpha': .88, 'pad': 1})
+
+    count_max = max(120., nice_upper_limit(np.array([max_count]), max(.06, axis_buffer)))
     count_threshold = 25.
+
     def count_forward(x):
         x = np.asarray(x)
         return np.where(x <= count_threshold, x,
                         count_threshold + (x-count_threshold)/compression)
+
     def count_inverse(x):
         x = np.asarray(x)
         return np.where(x <= count_threshold, x,
                         count_threshold + (x-count_threshold)*compression)
+
+    axb.set_xscale('function', functions=(count_forward, count_inverse))
     axb.set_xlim(0, count_max)
-    if count_max > count_threshold:
-        axb.set_xscale('function', functions=(count_forward, count_inverse))
-        count_ticks = np.unique(np.r_[np.arange(0, count_threshold+1, 5),
-                                      np.arange(60, min(count_max, 120)+1, 30)])
-        axb.set_xticks(count_ticks, [f'{v:g}' for v in count_ticks])
-        axb.minorticks_off()
-        axb.axvspan(count_threshold, count_max, color='#e5e5e5', alpha=.35, zorder=1)
-        axb.axvline(count_threshold, color='#777777', linestyle='--', linewidth=1)
-        axb.text(.98, .012, f'{compression:g}×\ncompressed',
-                 transform=axb.transAxes, ha='right', va='bottom',
-                 fontsize=16, color='#555555')
-    else:
-        from matplotlib.ticker import MaxNLocator
-        axb.xaxis.set_major_locator(MaxNLocator(nbins=6, integer=True))
-    axa.set_xlabel('Flood depth among inundated facilities (ft)', fontsize=16)
-    axb.set_xlabel('Inundated healthcare facilities', fontsize=16)
+    # A precise 25-facility breakpoint is marked by the dashed line and caption;
+    # do not crowd the bottom axis with 25, 30, 40, 50, 60, 90, 120.
+    count_ticks = [0, 10, 20, 60, 120]
+    if count_max >= 180:
+        count_ticks.append(count_max)
+    axb.set_xticks(count_ticks, [f'{v:g}' for v in count_ticks])
+    axb.minorticks_off()
+    axb.axvspan(count_threshold, count_max, color='#e5e5e5', alpha=.35, zorder=1)
+    axb.axvline(count_threshold, color='#777777', linestyle='--', linewidth=.75)
+    axb.text(.985, .012, f'{compression:g}×\ncompressed',
+             transform=axb.transAxes, ha='right', va='bottom',
+             fontsize=7.3, color='#555555', zorder=10,
+             bbox={'facecolor': 'white', 'edgecolor': 'none', 'alpha': .88, 'pad': 1})
+
+    axa.set_xlabel('Flood depth among inundated facilities (ft)', fontsize=9.25, labelpad=6)
+    axb.set_xlabel('Inundated healthcare facilities', fontsize=9.25, labelpad=6)
     for letter, ax in zip(('A', 'B'), (axa, axb)):
-        ax.grid(axis='x', color=GRID_COLOR, linestyle=(0, (2, 3)), linewidth=.7)
+        ax.grid(axis='x', color=GRID_COLOR, linestyle=(0, (2, 3)), linewidth=.5)
         ax.set_axisbelow(True)
-        ax.tick_params(axis='y', length=0)
-        ax.tick_params(axis='x', labelsize=16, color='#999999')
+        ax.tick_params(axis='y', length=0, pad=3)
+        ax.tick_params(axis='x', labelsize=8.25, color='#999999', length=2.5, pad=3)
         for side in ('top', 'right', 'left'):
             ax.spines[side].set_visible(False)
         ax.spines['bottom'].set_color('#999999')
-        ax.text(0, 1.015, letter, transform=ax.transAxes, fontsize=20, fontweight='bold')
-    labels = ('SSP2-4.5 median', 'SSP5-8.5 median (P50)', 'SSP5-8.5 P25', 'SSP5-8.5 P75')
-    handles = [Line2D([0], [0], color=color, lw=4, label=label)
+        ax.text(0, 1.012, letter, transform=ax.transAxes,
+                fontsize=11, fontweight='bold')
+
+    # Two concise rows above both panels; do not sacrifice plotting area.
+    labels = ('SSP2-4.5 median', 'SSP5-8.5 median (P50)',
+              'SSP5-8.5 P25', 'SSP5-8.5 P75')
+    handles = [Line2D([0], [0], color=color, lw=2.5, label=label)
                for color, label in zip(VIOLIN_COLORS, labels)]
     stats = [Line2D([0], [0], marker='o', color='none', markerfacecolor='#555555',
-                    markeredgecolor='white', markersize=6, label='Median'),
+                    markeredgecolor='white', markersize=5, label='Median'),
              Line2D([0], [0], marker='D', color='none', markerfacecolor='white',
-                    markeredgecolor='#555555', markersize=6, label='Mean')]
+                    markeredgecolor='#555555', markersize=5, label='Mean')]
     fig.legend(handles=handles + stats, loc='upper center',
-               bbox_to_anchor=(.56, .982), ncol=3, frameon=False,
-               fontsize=16, columnspacing=2.0, handletextpad=.8)
+               bbox_to_anchor=(.585, .985), ncol=3, frameon=False,
+               fontsize=8.6, columnspacing=1.1, handlelength=2.0,
+               handletextpad=.5, labelspacing=.45)
     return fig
 
 
@@ -579,8 +597,11 @@ def main():
     fig_all = make_all_storms_figure(loaded, args.axis_buffer, args.detail_max, args.all_events_compression)
     all_path = args.output_dir / 'climate_flood_exposure_comparison_all_tcs.png'
     fig_all.savefig(all_path, dpi=args.dpi, bbox_inches='tight', facecolor='white')
+    pdf_path = all_path.with_suffix('.pdf')
+    fig_all.savefig(pdf_path, bbox_inches='tight', facecolor='white')
     plt.close(fig_all)
     print(f'Saved {all_path}')
+    print(f'Saved {pdf_path}')
 
 
 if __name__ == '__main__':

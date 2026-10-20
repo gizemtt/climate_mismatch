@@ -20,7 +20,7 @@ is absent, the portfolio is set to full hardening at that climate
 representation's facility-specific Hmax.
 
 Outputs include manuscript-ready CSV tables, three-set Venn diagrams, and a
-two-level facility-decision and capital-allocation agreement figure.
+single-row facility protection-depth comparison figure.
 """
 
 from __future__ import annotations
@@ -392,6 +392,11 @@ def budget_title(budget: int) -> str:
 
 
 def plot_intersections(intersections: pd.DataFrame, budgets: Iterable[int], outbase: Path) -> None:
+    """Manuscript-width, three-panel Venn plot with caption-scale typography.
+
+    Font sizes account for the reduction when the exported image is inserted
+    at \textwidth. Counts and intersection definitions remain unchanged.
+    """
     keys = [climate.key for climate in CLIMATES]
     budgets = tuple(budgets)
     colors = {climate.key: climate.color for climate in CLIMATES}
@@ -409,42 +414,60 @@ def plot_intersections(intersections: pd.DataFrame, budgets: Iterable[int], outb
         ((0.43, 0.22), colors["main"]),
         ((0.00, -0.45), colors["perc"]),
     )
-    fig, axes = plt.subplots(1, len(budgets), figsize=(12.2, 4.35), squeeze=False)
-    for column, budget in enumerate(budgets):
-        ax = axes[0, column]
-        data = intersections[intersections["budget"] == budget]
-        counts: dict[tuple[bool, bool, bool], int] = {}
-        for pattern in region_positions:
-            match = np.ones(len(data), dtype=bool)
-            for key, state in zip(keys, pattern):
-                match &= data[f"selected_{key}"].to_numpy() == state
-            counts[pattern] = int(data.loc[match, "facility_count"].sum())
+    with plt.rc_context({
+        "font.family": "sans-serif",
+        "font.sans-serif": ["Arial", "DejaVu Sans"],
+        "pdf.fonttype": 42,
+        "ps.fonttype": 42,
+    }):
+        # Wide canvas is reduced to the manuscript text width in LaTeX.
+        fig, axes = plt.subplots(1, len(budgets), figsize=(12.2, 4.20), squeeze=False)
+        for column, budget in enumerate(budgets):
+            ax = axes[0, column]
+            data = intersections[intersections["budget"] == budget]
+            counts: dict[tuple[bool, bool, bool], int] = {}
+            for pattern in region_positions:
+                match = np.ones(len(data), dtype=bool)
+                for key, state in zip(keys, pattern):
+                    match &= data[f"selected_{key}"].to_numpy() == state
+                counts[pattern] = int(data.loc[match, "facility_count"].sum())
 
-        for center, color in circle_specs:
-            ax.add_patch(Circle(center, 0.86, facecolor=color, edgecolor=color, alpha=0.15, linewidth=2.0))
-            ax.add_patch(Circle(center, 0.86, facecolor="none", edgecolor=color, linewidth=2.0))
-        for pattern, (x, y) in region_positions.items():
-            count = counts[pattern]
-            ax.text(
-                x, y, str(count), ha="center", va="center", fontsize=12,
-                fontweight="bold", color="#222222" if count else "#888888",
-            )
-        ax.set_title(budget_title(budget), fontsize=12, fontweight="bold")
-        ax.set_xlim(-1.35, 1.35)
-        ax.set_ylim(-1.36, 1.25)
-        ax.set_aspect("equal")
-        ax.axis("off")
-        ax.text(-1.28, 1.14, chr(ord("A") + column), fontsize=12, fontweight="bold")
+            for center, color in circle_specs:
+                ax.add_patch(Circle(center, 0.86, facecolor=color, edgecolor="none", alpha=0.15))
+                ax.add_patch(Circle(center, 0.86, facecolor="none", edgecolor=color, linewidth=2.4))
+            for pattern, (x, y) in region_positions.items():
+                count = counts[pattern]
+                ax.text(x, y, str(count), ha="center", va="center",
+                        fontsize=18, fontweight="bold",
+                        color="#222222" if count else "#777777")
 
-    handles = [
-        Patch(facecolor=climate.color, edgecolor=climate.color, alpha=0.35, label=climate.label)
-        for climate in CLIMATES
-    ]
-    fig.legend(handles=handles, loc="lower center", ncol=3, frameon=False, bbox_to_anchor=(0.5, -0.01))
-    fig.suptitle("Overlap in facilities selected for hardening", y=0.99, fontsize=13)
-    fig.subplots_adjust(left=0.02, right=0.99, bottom=0.19, top=0.84, wspace=0.12)
-    fig.savefig(outbase.with_suffix(".png"), dpi=400, bbox_inches="tight")
-    plt.close(fig)
+            ax.set_title(budget_title(budget), fontsize=20, fontweight="bold", pad=13)
+            ax.set_xlim(-1.35, 1.35)
+            ax.set_ylim(-1.36, 1.25)
+            ax.set_aspect("equal")
+            ax.axis("off")
+            # Panel letters intentionally separate from the centered budget headings.
+            ax.text(0.02, 1.07, chr(ord("A") + column),
+                    transform=ax.transAxes, fontsize=20, fontweight="bold",
+                    ha="left", va="bottom")
+
+        handles = [
+            Patch(facecolor=climate.color, edgecolor=climate.color,
+                  alpha=0.35, label=climate.label)
+            for climate in CLIMATES
+        ]
+        fig.legend(handles=handles, loc="lower center", ncol=3,
+                   frameon=False, bbox_to_anchor=(0.5, 0.015),
+                   fontsize=16.5, handlelength=1.25,
+                   handletextpad=0.45, columnspacing=1.5)
+        # Figure-level title removed: the manuscript caption supplies it.
+        fig.subplots_adjust(left=0.025, right=0.985, bottom=0.185, top=0.855,
+                            wspace=0.12)
+        fig.savefig(outbase.with_suffix(".png"), dpi=500,
+                    bbox_inches="tight", pad_inches=0.10)
+        fig.savefig(outbase.with_suffix(".pdf"),
+                    bbox_inches="tight", pad_inches=0.10)
+        plt.close(fig)
 
 
 def build_pairwise_facility_differences(
@@ -531,133 +554,132 @@ def plot_integrated_portfolio_comparison(
     budgets: Iterable[int],
     outpath: Path,
 ) -> None:
-    """Plot two levels of agreement over each pairwise protected union."""
+    r"""Plot the three protection-depth panels at manuscript-readable type sizes.
+
+    The figure is intended for full-text-width insertion in LaTeX. Because the
+    wide Matplotlib canvas is reduced by ``\includegraphics[width=\textwidth]``,
+    the source fonts need to be substantially larger than typical on-screen
+    figure fonts to remain close to the manuscript caption's visual size.
+
+    Change FONT_SCALE below if the document uses a substantially different
+    text width. The numerical computations and portfolio classifications are
+    unchanged.
+    """
     budgets = tuple(budgets)
     climate_colors = {climate.key: climate.color for climate in CLIMATES}
     pair_labels = (
-        "SSP5-8.5\nvs SSP2-4.5",
-        "Uncertainty\nvs SSP2-4.5",
-        "Uncertainty\nvs SSP5-8.5",
+        "SSP5-8.5\nvs\nSSP2-4.5",
+        "Uncert.\nvs\nSSP2-4.5",
+        "Uncert.\nvs\nSSP5-8.5",
     )
     x_positions = np.arange(len(pair_labels))
 
-    fig = plt.figure(figsize=(14.2, 8.2))
-    grid = fig.add_gridspec(
-        2, len(budgets), height_ratios=(1.0, 1.0),
-        left=0.07, right=0.99, bottom=0.21, top=0.91,
-        hspace=0.28, wspace=0.18,
-    )
-    decision_axes: list[plt.Axes] = []
-    capital_axes: list[plt.Axes] = []
+    # Tuned for a three-panel figure included at \textwidth in the manuscript.
+    # Original 10.5--14 pt labels became about 5--7 pt after LaTeX scaling.
+    # These sizes yield approximately 8--10 pt labels in the typeset PDF.
+    FONT_SCALE = 1.0
+    size = lambda pts: pts * FONT_SCALE
 
-    for column, budget in enumerate(budgets):
-        decision_ax = fig.add_subplot(grid[0, column])
-        capital_ax = fig.add_subplot(grid[1, column])
-        decision_axes.append(decision_ax)
-        capital_axes.append(capital_ax)
-        budget_data = differences[differences["budget"] == budget]
-        budget_summary = summary[summary["budget"] == budget].set_index("pair_index")
+    with plt.rc_context({
+        "font.family": "sans-serif",
+        "font.sans-serif": ["Arial", "DejaVu Sans"],
+        "pdf.fonttype": 42,
+        "ps.fonttype": 42,
+    }):
+        fig = plt.figure(figsize=(14.2, 5.65), facecolor="white")
+        grid = fig.add_gridspec(
+            1, len(budgets),
+            left=0.075, right=0.993, bottom=0.355, top=0.850,
+            wspace=0.225,
+        )
 
-        for pair_index, x_position in enumerate(x_positions):
-            pair_data = budget_data[budget_data["pair_index"] == pair_index]
-            row = budget_summary.loc[pair_index]
-            facility_count = int(row["facility_count"])
-            first_share = 100 * float(row["first_deeper_count"]) / facility_count
-            same_share = 100 * float(row["same_positive_depth_count"]) / facility_count
-            second_share = 100 * float(row["second_deeper_count"]) / facility_count
-            first_key, second_key, _ = DIFFERENCE_PAIRS[pair_index]
-            decision_segments = (
-                (first_share, climate_colors[first_key], "white"),
-                (same_share, "#737373", "white"),
-                (second_share, climate_colors[second_key], "white"),
-            )
-            bottom = 0.0
-            for share, color, text_color in decision_segments:
-                decision_ax.bar(
-                    x_position, share, bottom=bottom, width=0.64,
-                    color=color, edgecolor="white", linewidth=0.9,
+        for column, budget in enumerate(budgets):
+            decision_ax = fig.add_subplot(grid[0, column])
+            budget_summary = summary[summary["budget"] == budget].set_index("pair_index")
+
+            for pair_index, x_position in enumerate(x_positions):
+                row = budget_summary.loc[pair_index]
+                facility_count = int(row["facility_count"])
+                first_share = 100 * float(row["first_deeper_count"]) / facility_count
+                same_share = 100 * float(row["same_positive_depth_count"]) / facility_count
+                second_share = 100 * float(row["second_deeper_count"]) / facility_count
+                first_key, second_key, _ = DIFFERENCE_PAIRS[pair_index]
+                decision_segments = (
+                    (first_share, climate_colors[first_key], "white"),
+                    (same_share, "#737373", "white"),
+                    (second_share, climate_colors[second_key], "white"),
                 )
-                if share >= 7.5:
-                    decision_ax.text(
-                        x_position, bottom + share / 2, f"{share:.0f}%",
-                        ha="center", va="center", fontsize=10.5,
-                        color=text_color, fontweight="bold",
+                bottom = 0.0
+                for share, color, text_color in decision_segments:
+                    decision_ax.bar(
+                        x_position, share, bottom=bottom, width=0.71,
+                        color=color, edgecolor="white", linewidth=1.0,
                     )
-                bottom += share
-            decision_ax.text(
-                x_position, 103, f"n={facility_count}",
-                ha="center", va="bottom", fontsize=12, color="#444444",
-            )
-
-            dissimilarity = 100 * float(
-                row["capital_allocation_dissimilarity"]
-            )
-            overlap = 100 - dissimilarity
-            capital_segments = (
-                (overlap, "#bdbdbd", "#222222"),
-                (dissimilarity, "#a63d40", "white"),
-            )
-            bottom = 0.0
-            for share, color, text_color in capital_segments:
-                capital_ax.bar(
-                    x_position, share, bottom=bottom, width=0.64,
-                    color=color, edgecolor="white", linewidth=0.9,
+                    # Preserve the original minimum labeling threshold; avoid
+                    # squeezing numbers into the very thinnest bar segments.
+                    if share >= 7.5:
+                        decision_ax.text(
+                            x_position, bottom + share / 2, f"{share:.0f}%",
+                            ha="center", va="center", fontsize=size(14.5 if share < 12 else 18.5),
+                            color=text_color, fontweight="bold",
+                        )
+                    bottom += share
+                decision_ax.text(
+                    x_position, 103, f"n={facility_count}",
+                    ha="center", va="bottom", fontsize=size(17.5),
+                    color="#333333",
                 )
-                if share >= 7.5:
-                    capital_ax.text(
-                        x_position, bottom + share / 2, f"{share:.0f}%",
-                        ha="center", va="center", fontsize=10.5,
-                        color=text_color, fontweight="bold",
-                    )
-                bottom += share
 
-        for axis in (decision_ax, capital_ax):
-            axis.set_xlim(-0.55, 2.55)
-            axis.set_ylim(0, 110)
-            axis.set_yticks((0, 50, 100))
-            axis.grid(axis="y", color="#dddddd", linestyle=(0, (2, 3)), linewidth=0.8)
-            axis.set_axisbelow(True)
-            axis.spines[["top", "right"]].set_visible(False)
-            axis.tick_params(axis="y", labelsize=10.5)
+            decision_ax.set_xlim(-0.52, 2.52)
+            decision_ax.set_ylim(0, 110)
+            decision_ax.set_yticks((0, 50, 100))
+            decision_ax.grid(
+                axis="y", color="#dddddd", linestyle=(0, (2, 3)), linewidth=0.85,
+            )
+            decision_ax.set_axisbelow(True)
+            decision_ax.spines[["top", "right"]].set_visible(False)
+            decision_ax.tick_params(axis="y", labelsize=size(16.5), length=3.5)
             if column > 0:
-                axis.tick_params(axis="y", labelleft=False, left=False)
+                decision_ax.tick_params(axis="y", labelleft=False, left=False)
 
-        decision_ax.set_xticks(x_positions, pair_labels, fontsize=12)
-        decision_ax.tick_params(axis="x", pad=4)
-        decision_ax.text(
-            -0.03, 1.04, chr(ord("A") + column), transform=decision_ax.transAxes,
-            fontsize=14, fontweight="bold", ha="left", va="bottom",
-        )
-        decision_ax.text(
-            0.5, 1.04, budget_title(budget), transform=decision_ax.transAxes,
-            fontsize=14, fontweight="bold", ha="center", va="bottom",
-        )
-        capital_ax.set_xticks(x_positions, pair_labels, fontsize=12)
-        capital_ax.tick_params(axis="x", pad=4)
-        if column == 0:
-            decision_ax.set_ylabel(
-                "Portfolio installing deeper \nprotection (% of facilities)",
-                fontsize=13,
+            decision_ax.set_xticks(x_positions, pair_labels, fontsize=size(16.5))
+            decision_ax.tick_params(axis="x", pad=7, length=3.5)
+            decision_ax.text(
+                -0.035, 1.052, chr(ord("A") + column),
+                transform=decision_ax.transAxes,
+                fontsize=size(20.5), fontweight="bold",
+                ha="left", va="bottom",
             )
-            capital_ax.set_ylabel(
-                "Capital-allocation agreement\n(% of combined investment)",
-                fontsize=13,
+            decision_ax.text(
+                0.5, 1.052, budget_title(budget),
+                transform=decision_ax.transAxes,
+                fontsize=size(20.5), fontweight="bold",
+                ha="center", va="bottom",
             )
+            if column == 0:
+                decision_ax.set_ylabel(
+                    "Portfolio installing deeper\nprotection (% of facilities)",
+                    fontsize=size(18), labelpad=9,
+                )
 
-    legend_handles = [
-        Patch(facecolor=climate_colors["ssp245"], label="SSP2-4.5 median deeper"),
-        Patch(facecolor=climate_colors["main"], label="SSP5-8.5 median deeper"),
-        Patch(facecolor=climate_colors["perc"], label="SSP5-8.5 response uncertainty deeper"),
-        Patch(facecolor="#737373", label="Same positive protection depth"),
-        Patch(facecolor="#bdbdbd", label="Shared capital allocation"),
-        Patch(facecolor="#a63d40", label="Capital allocated differently"),
-    ]
-    fig.legend(
-        handles=legend_handles, loc="lower center", ncol=3,
-        frameon=False, bbox_to_anchor=(0.5, 0.025), fontsize=13,
-    )
-    fig.savefig(outpath, dpi=400, bbox_inches="tight")
-    plt.close(fig)
+        legend_handles = [
+            Patch(facecolor=climate_colors["ssp245"], label="SSP2-4.5 median deeper"),
+            Patch(facecolor=climate_colors["main"], label="SSP5-8.5 median deeper"),
+            Patch(facecolor=climate_colors["perc"], label="SSP5-8.5 response uncertainty deeper"),
+            Patch(facecolor="#737373", label="Same positive protection depth"),
+        ]
+        fig.legend(
+            handles=legend_handles,
+            loc="lower center", ncol=2,
+            frameon=False, bbox_to_anchor=(0.5, 0.018),
+            fontsize=size(18), handlelength=1.25,
+            handleheight=0.90, handletextpad=0.50,
+            labelspacing=0.55, columnspacing=1.6,
+        )
+        fig.savefig(outpath, dpi=500, bbox_inches="tight", pad_inches=0.10)
+        # Vector version for crisp lettering in a typeset PDF.
+        fig.savefig(outpath.with_suffix(".pdf"), bbox_inches="tight", pad_inches=0.10)
+        plt.close(fig)
 
 
 def parse_args() -> argparse.Namespace:

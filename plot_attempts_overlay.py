@@ -1,5 +1,12 @@
 '''
-run: 
+Each budget panel uses its own data-driven, linear axis ranges (no insets).
+Axis values are shown in full, without scientific notation or offsets.
+The three-panel figure is sized for a manuscript text width of about 6.5 in.
+Text and symbols are specified at that size; include it at the full text width.
+The reported SSP2-4.5 full-protection outcome at $600M is included explicitly,
+even when no attempts CSV was produced for this single-point frontier.
+
+Run:
 python plot_attempts_overlay.py --budgets "50000000,300000000,600000000" --scenario_sets "ssp245,main,perc"
 '''
 
@@ -12,7 +19,7 @@ from typing import Dict, List
 import matplotlib.pyplot as plt
 import pandas as pd
 from matplotlib.lines import Line2D
-from mpl_toolkits.axes_grid1.inset_locator import inset_axes, mark_inset
+from matplotlib.ticker import MaxNLocator, ScalarFormatter
 
 
 SCENARIO_FOLDER_MAP: Dict[str, str] = {
@@ -26,6 +33,9 @@ SCENARIO_FOLDER_MAP: Dict[str, str] = {
 
 # Plain-language labels are used in the paper figure; the internal scenario-set
 # notation remains confined to file and folder names.
+# Exact colors from POINT_REPRESENTATIONS and UNCERTAINTY in
+# plot_protection_flooddepth.py. Its protection bars use alpha=0.90 and
+# white edges; use the same treatment here to match their appearance.
 SCENARIO_STYLE_MAP: Dict[str, Dict[str, str]] = {
     "S_245": {
         "color": "#0072B2",
@@ -38,18 +48,24 @@ SCENARIO_STYLE_MAP: Dict[str, Dict[str, str]] = {
         "label": "SSP5-8.5 median",
     },
     "S_perc": {
-        "color": "#009E73",
+        "color": "#7B3294",
         "marker": "^",
         "label": "SSP5-8.5 response uncertainty",
     },
 }
 
+FRONTIER_ALPHA = 0.90
+DEFAULT_MARKER_AREA = 16
+LEGEND_MARKER_SIZE = 6.5
+KNEE_COLOR = "#C00000"
+KNEE_LINEWIDTH = 0.9
+
 CANONICAL_SCENARIO_ORDER = ["S_245", "S_main", "S_perc"]
 
 # Rounded knee-point outcomes reported in the results table, expressed in
 # millions as (Expected economic loss, service-disruption impact). The
-# plotting routine highlights the nearest computed Pareto point so the marker
-# remains anchored to an actual solution from each CSV.
+# plotting routine highlights the nearest computed Pareto point. The reported
+# (0, 0) full-protection policy is included separately below when necessary.
 KNEE_POINT_TARGETS = {
     50_000_000: {
         "S_245": (553.0, 304.0),
@@ -62,25 +78,38 @@ KNEE_POINT_TARGETS = {
         "S_perc": (249.0, 144.0),
     },
     600_000_000: {
+        # All representative policies coincide at the origin for SSP2-4.5.
+        "S_245": (0.0, 0.0),
+        "S_main": (10.0, 3.0),
         "S_perc": (88.0, 40.0),
     },
 }
 
+# Source: the supplied manuscript's operational-outcomes table. This is a
+# reported result, not an estimate from missing data. The SSP2-4.5 frontier at
+# $600M collapses to this point, so an epsilon-sweep CSV may be absent.
+REPORTED_SINGLE_POINT_FRONTIERS = {
+    (600_000_000, "S_245"): (0.0, 0.0),
+}
+
 
 def set_style() -> None:
+    # Sizes are in points at the intended manuscript width, rather than at
+    # an oversized canvas that must be reduced substantially by LaTeX.
     plt.rcParams.update(
         {
             "font.family": "sans-serif",
             "font.sans-serif": ["Arial", "DejaVu Sans"],
-            "font.size": 10,
-            "axes.titlesize": 11,
-            "axes.labelsize": 10,
+            "font.size": 9,
+            "axes.titlesize": 10,
+            "axes.labelsize": 9.5,
+            "figure.labelsize": 9.5,
             "legend.fontsize": 9,
-            "xtick.labelsize": 9,
-            "ytick.labelsize": 9,
-            "axes.linewidth": 0.8,
-            "lines.linewidth": 1.2,
-            "grid.linewidth": 0.5,
+            "xtick.labelsize": 8.5,
+            "ytick.labelsize": 8.5,
+            "axes.linewidth": 0.7,
+            "lines.linewidth": 0.9,
+            "grid.linewidth": 0.3,
             "grid.alpha": 0.22,
             "figure.dpi": 150,
             "savefig.dpi": 600,
@@ -122,8 +151,7 @@ def load_attempts_csv(path: Path) -> pd.DataFrame:
     if not path.exists():
         raise FileNotFoundError(f"File not found: {path}")
     df = pd.read_csv(path)
-    if df.empty:
-        raise ValueError(f"CSV is empty: {path}")
+    # Header-only files are handled as empty plot data by add_panel().
     df.columns = df.columns.str.strip()
     for column in df.columns:
         if df[column].dtype == object:
@@ -134,7 +162,7 @@ def load_attempts_csv(path: Path) -> pd.DataFrame:
 def prettify_axis_label(column: str) -> str:
     labels = {
         "f1": "Expected economic loss (million US$)",
-        "f2": "Expected healthcare service-disruption impact (million)",
+        "f2": "Expected healthcare\nservice-disruption impact (million)",
         "eps": r"$\varepsilon$",
         "epsilon": r"$\varepsilon$",
     }
@@ -186,14 +214,42 @@ def add_panel(
     plotted_any = False
     for scenario_folder in scenario_folders:
         path = get_csv_path(base_dir, scenario_folder, budget)
+        reported_point = (
+            REPORTED_SINGLE_POINT_FRONTIERS.get((budget, scenario_folder))
+            if (xcol, ycol) == ("f1", "f2") else None
+        )
         if not path.exists():
             print(
                 f"[WARN] Missing file for budget={budget}, "
                 f"scenario={scenario_folder}: {path}"
             )
-            continue
+            if reported_point is None:
+                continue
+            plot_df = pd.DataFrame(columns=[xcol, ycol], dtype=float)
+        else:
+            try:
+                plot_df = prepare_plot_data(path, xcol, ycol)
+            except pd.errors.EmptyDataError:
+                if reported_point is None:
+                    raise
+                plot_df = pd.DataFrame(columns=[xcol, ycol], dtype=float)
 
-        plot_df = prepare_plot_data(path, xcol, ycol)
+        if reported_point is not None:
+            # Include the documented outcome in both the plot and autoscaling.
+            # Keep any CSV rows; adding this exact point also anchors its red
+            # knee-policy circle at (0, 0), rather than at a nearby CSV row.
+            reported_df = pd.DataFrame(
+                {xcol: [reported_point[0]], ycol: [reported_point[1]]}
+            )
+            plot_df = (
+                reported_df if plot_df.empty else
+                pd.concat([plot_df, reported_df], ignore_index=True)
+            ).drop_duplicates().sort_values(xcol)
+            print(
+                f"[INFO] Included reported full-protection outcome "
+                f"{reported_point} for budget={budget}, scenario={scenario_folder}."
+            )
+
         if plot_df.empty:
             print(
                 f"[WARN] No valid numeric rows for budget={budget}, "
@@ -207,7 +263,7 @@ def add_panel(
                 plot_df[xcol],
                 plot_df[ycol],
                 color=style["color"],
-                alpha=1.0,
+                alpha=FRONTIER_ALPHA,
                 zorder=2,
             )
         ax.scatter(
@@ -216,10 +272,10 @@ def add_panel(
             label=style["label"],
             color=style["color"],
             marker=style["marker"],
-            alpha=1.0,
+            alpha=FRONTIER_ALPHA,
             s=size,
-            edgecolors="black",
-            linewidths=0.35,
+            edgecolors="white",
+            linewidths=0.25,
             zorder=3,
         )
         if highlight_knees:
@@ -235,11 +291,12 @@ def add_panel(
                 ax.scatter(
                     [knee_row[xcol]],
                     [knee_row[ycol]],
-                    s=size * 2.8,
+                    s=size * 3.0,
                     facecolors="none",
-                    edgecolors="#C00000",
-                    linewidths=1.2,
-                    zorder=5,
+                    edgecolors=KNEE_COLOR,
+                    linewidths=KNEE_LINEWIDTH,
+                    zorder=10,
+                    clip_on=False,
                 )
         plotted_any = True
 
@@ -248,6 +305,20 @@ def add_panel(
     ax.spines["right"].set_visible(False)
     ax.margins(x=0.05, y=0.08)
     return plotted_any
+
+
+def format_panel_axes(ax: plt.Axes) -> None:
+    """Keep each panel's local limits and show unambiguous numeric ticks."""
+    for axis in (ax.xaxis, ax.yaxis):
+        # Separate locators/formatters are needed because scales differ.
+        axis.set_major_locator(MaxNLocator(nbins=4, min_n_ticks=3))
+        formatter = ScalarFormatter(useOffset=False)
+        formatter.set_scientific(False)
+        axis.set_major_formatter(formatter)
+    ax.tick_params(
+        axis="both", which="major", labelbottom=True, labelleft=True,
+        pad=3.5, length=3, width=0.7,
+    )
 
 
 def make_combined_figure(
@@ -269,13 +340,14 @@ def make_combined_figure(
     fig, axes = plt.subplots(
         1,
         n_panels,
-        figsize=(3.45 * n_panels, 3.55),
+        figsize=(max(3.5, (6.5 / 3) * n_panels), 3.1),
         squeeze=False,
+        sharex=False,
+        sharey=False,
     )
     axes = axes.ravel()
 
     plotted_any = False
-    panel_limits = []
     for panel_index, (ax, budget) in enumerate(zip(axes, budgets)):
         panel_has_data = add_panel(
             ax=ax,
@@ -286,16 +358,23 @@ def make_combined_figure(
             ycol=ycol,
             size=size,
             connect_points=connect_points,
-            highlight_knees=False,
+            highlight_knees=True,
         )
         plotted_any = plotted_any or panel_has_data
-        panel_limits.append((ax.get_xlim(), ax.get_ylim()) if panel_has_data else None)
+        # add_panel() autoscales to all available frontiers at this budget,
+        # with modest padding. Do not replace these limits with global ones.
+        format_panel_axes(ax)
+        if not panel_has_data:
+            ax.text(
+                0.5, 0.5, "No data available", transform=ax.transAxes,
+                ha="center", va="center", color="#666666",
+            )
         panel_letter = chr(ord("A") + panel_index)
         ax.set_title(
             rf"{panel_letter}   \${budget / 1e6:.0f} million",
             loc="left",
             fontweight="bold",
-            pad=8,
+            pad=6,
         )
 
     if not plotted_any:
@@ -306,91 +385,28 @@ def make_combined_figure(
             "attempts_epsilon_B<budget>_<scenario>.csv"
         )
 
-    # Use identical main-axis limits so absolute outcome differences across
-    # budgets can be compared directly.
-    valid_limits = [limits for limits in panel_limits if limits is not None]
-    common_xlim = (
-        min(limits[0][0] for limits in valid_limits),
-        max(limits[0][1] for limits in valid_limits),
-    )
-    common_ylim = (
-        min(limits[1][0] for limits in valid_limits),
-        max(limits[1][1] for limits in valid_limits),
-    )
-    for ax in axes:
-        ax.set_xlim(common_xlim)
-        ax.set_ylim(common_ylim)
-
-    # Small local-scale views retain the shape of each frontier while the main
-    # panels preserve a common scale for cross-budget comparison.
-    for panel_index, (ax, budget, local_limits) in enumerate(
-        zip(axes, budgets, panel_limits)
-    ):
-        if local_limits is None:
-            continue
-        inset_kwargs = {}
-        if panel_index == 0:
-            # Nudge Panel A's inset away from the left and bottom axes while
-            # preserving the lower-left placement used in the preferred version.
-            inset_kwargs = {
-                "bbox_to_anchor": (0.05, 0.04, 1.0, 1.0),
-                "bbox_transform": ax.transAxes,
-            }
-        inset_ax = inset_axes(
-            ax,
-            width="34%",
-            height="34%",
-            loc="lower left" if panel_index == 0 else "upper right",
-            borderpad=0.9,
-            **inset_kwargs,
-        )
-        add_panel(
-            ax=inset_ax,
-            budget=budget,
-            scenario_folders=scenario_folders,
-            base_dir=base_dir,
-            xcol=xcol,
-            ycol=ycol,
-            size=max(8, size * 0.42),
-            connect_points=connect_points,
-            highlight_knees=True,
-        )
-        inset_ax.set_xlim(local_limits[0])
-        inset_ax.set_ylim(local_limits[1])
-        inset_ax.tick_params(axis="both", labelsize=5.5, length=2, pad=1)
-        inset_ax.grid(True, linestyle=":", linewidth=0.35, alpha=0.25)
-        inset_ax.set_facecolor("white")
-        inset_ax.set_title(
-            "Zoomed view",
-            loc="left",
-            fontsize=6,
-            fontweight="bold",
-            pad=2,
-        )
-        for spine in inset_ax.spines.values():
-            spine.set_visible(True)
-            spine.set_linewidth(0.6)
-        mark_inset(
-            ax,
-            inset_ax,
-            loc1=2,
-            loc2=4,
-            fc="none",
-            ec="#888888",
-            lw=0.45,
-            alpha=0.65,
-        )
-
     fig.supxlabel(prettify_axis_label(xcol), y=0.02)
     fig.supylabel(prettify_axis_label(ycol), x=0.015)
 
+    # Explicit legend handles keep the symbols legible independently
+    # of the scatter size, including when --size is overridden by the caller.
+    plotted_labels = {
+        label for ax in axes for label in ax.get_legend_handles_labels()[1]
+    }
     handles, labels = [], []
-    for ax in axes:
-        panel_handles, panel_labels = ax.get_legend_handles_labels()
-        for handle, label in zip(panel_handles, panel_labels):
-            if label not in labels:
-                handles.append(handle)
-                labels.append(label)
+    for scenario_folder in scenario_folders:
+        style = SCENARIO_STYLE_MAP[scenario_folder]
+        if style["label"] not in plotted_labels:
+            continue
+        handles.append(
+            Line2D(
+                [0], [0], marker=style["marker"], linestyle="none",
+                markerfacecolor=style["color"], markeredgecolor="white",
+                markeredgewidth=0.35, markersize=LEGEND_MARKER_SIZE,
+                alpha=FRONTIER_ALPHA,
+            )
+        )
+        labels.append(style["label"])
     handles.append(
         Line2D(
             [0],
@@ -398,29 +414,44 @@ def make_combined_figure(
             marker="o",
             linestyle="none",
             markerfacecolor="none",
-            markeredgecolor="#C00000",
-            markeredgewidth=1.2,
-            markersize=7,
+            markeredgecolor=KNEE_COLOR,
+            markeredgewidth=KNEE_LINEWIDTH,
+            markersize=LEGEND_MARKER_SIZE + 0.5,
         )
     )
     labels.append("Knee-point policy")
+    # Two rows keep the legend labels readable without crowding.
+    legend_columns = 2 if n_panels >= 2 else 1
+    # Matplotlib fills columns first; retain reading order across each row.
+    legend_order = [
+        index for column in range(legend_columns)
+        for index in range(column, len(handles), legend_columns)
+    ]
     fig.legend(
-        handles,
-        labels,
+        [handles[index] for index in legend_order],
+        [labels[index] for index in legend_order],
         loc="upper center",
-        bbox_to_anchor=(0.5, 1.015),
-        ncol=min(4, len(labels)),
+        bbox_to_anchor=(0.54, 1.0),
+        ncol=legend_columns,
         frameon=False,
-        handletextpad=0.45,
+        numpoints=1,
+        handlelength=1.0,
+        handletextpad=0.55,
         columnspacing=1.4,
+        labelspacing=0.45,
     )
 
-    fig.subplots_adjust(left=0.075, right=0.99, bottom=0.18, top=0.80, wspace=0.27)
+    fig.subplots_adjust(
+        left=0.8 / fig.get_figwidth(), right=0.985, bottom=0.19,
+        top=0.76 if legend_columns == 2 else 0.61, wspace=0.34,
+    )
 
     plot_dir = Path(out_dir)
     plot_dir.mkdir(parents=True, exist_ok=True)
     out_png = plot_dir / "climate_pareto_frontiers.png"
-    fig.savefig(out_png, bbox_inches="tight", facecolor="white")
+    # Keep the physical canvas size fixed so the text size is predictable
+    # when LaTeX places this image at the manuscript's text width.
+    fig.savefig(out_png, facecolor="white")
     plt.close(fig)
 
     print("[OK] Saved:")
@@ -432,7 +463,8 @@ def main() -> None:
     parser = argparse.ArgumentParser(
         description=(
             "Create a combined, multi-panel Pareto-frontier figure across "
-            "mitigation budgets and climate representations."
+            "mitigation budgets and climate representations, using independent "
+            "axis ranges for each budget panel and no insets."
         )
     )
     parser.add_argument(
@@ -449,7 +481,10 @@ def main() -> None:
     parser.add_argument("--out_dir", default="output/plots")
     parser.add_argument("--xcol", default="f1")
     parser.add_argument("--ycol", default="f2")
-    parser.add_argument("--size", type=float, default=28)
+    parser.add_argument(
+        "--size", type=float, default=DEFAULT_MARKER_AREA,
+        help="Frontier marker area in points squared (default: 16).",
+    )
     parser.add_argument("--no_connect", action="store_true")
     args = parser.parse_args()
 
