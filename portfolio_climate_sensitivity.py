@@ -59,7 +59,7 @@ CLIMATES = (
     ),
     ClimateSpec(
         "perc", "S_perc", "SSP5-8.5 response uncertainty",
-        "SSP5-8.5 response\nuncertainty", "#E69F00",
+        "SSP5-8.5 response\nuncertainty", "#7B3294",
         "flood_scenarios_585_q1q2q3.csv",
     ),
 )

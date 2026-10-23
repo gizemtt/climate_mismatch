@@ -1,571 +1,322 @@
+#!/usr/bin/env python3
+"""Export the pictured regret comparison table for all available budgets.
+
+Run from the climate_mismatch project root:
+    python build_regret_reduction_table.py
+
+Only output file (no plots, LaTeX, or optimization solves):
+    output/minimax_regret_fixed_reference/regret_reduction_table.csv
+
+Default budgets ($M): 50, 100, 200, 300, 400, 500, 600, 800.
+The CSV has THREE target-climate rows per budget. Each target row displays the
+TWO alternative source portfolios, identified by:
+    I = SSP2-4.5 median; H = SSP5-8.5 median; U = SSP5-8.5 uncertainty.
+Budget-wide quantities appear in the first row of each budget group.
+
+Definitions (all comparisons are computed using Decimal without dollar rounding):
+    specific_regret(source,target) = historical_Q1 - historical_matched_benchmark
+    robust_regret(target)          = fixed_reference_regret_estimate
+    pairwise_difference           = specific_regret - robust_regret(target)
+
+    largest_specific = max specific_regret(source,target), source != target
+    largest_robust   = max robust_regret(target)
+    largest_regret_reduction = largest_specific - largest_robust
+
+    worst_case_specific(source) = max specific_regret(source,target), target != source
+    best_specific = argmin_source worst_case_specific(source)
+    value_of_robust_planning = worst_case_specific(best_specific) - largest_robust
+
+Money is exported in millions with an M suffix and ALL decimal places present
+in the source calculations (e.g., 1200000 -> 1.2M, 1234567.89 -> 1.23456789M).
+No scientific notation, fixed decimal limit, or float conversion is used for
+monetary amounts. Percentage ratios can have infinitely many decimal places;
+by default they are shown to 15 places, without unnecessary trailing zeros.
+
+NOTE: The climate-specific and robust regrets retain the DIFFERENT reference
+benchmarks used in the original inputs. The resulting differences reproduce
+the provided table but are not strictly like-for-like economic comparisons.
+"""
 from __future__ import annotations
 
 import argparse
 import csv
-import math
-import re
+from decimal import Decimal, InvalidOperation, localcontext
 from pathlib import Path
-from typing import Dict, List, Optional
 
-import matplotlib.pyplot as plt
+# Larger than the precision in the input CSVs; keeps subtraction and
+# dollar-to-million conversions exact at source precision.
+DECIMAL_PRECISION = 100
+MILLION = Decimal("1000000")
 
-
+BUDGETS_M = (50, 100, 200, 300, 400, 500, 600, 800)
 CLIMATES = ("ssp245", "main", "perc")
-DISPLAY_NAMES = {
+CLIMATE_NAMES = {
     "ssp245": "SSP2-4.5 median",
     "main": "SSP5-8.5 median",
-    "perc": "SSP5-8.5 uncertainty",
+    "perc": "SSP5-8.5 response uncertainty",
 }
-
-PLOT_MARKERS = {
-    "ssp245": "o",
-    "main": "s",
-    "perc": "^",
-    "robust": "D",
+# Matches the left-to-right source order of the handwritten $300M example:
+# SSP2-4.5 target: U,H; SSP5-8.5 median target: U,I;
+# SSP5-8.5 uncertainty target: H,I.
+SOURCE_ORDER = {
+    "ssp245": ("perc", "main"),
+    "main": ("perc", "ssp245"),
+    "perc": ("main", "ssp245"),
 }
+SOURCE_CODES = {"ssp245": "I", "main": "H", "perc": "U"}
+HEADERS = [
+    "Budget ($M)",
+    "Target climate",
+    "Robust regret ($M)",
+    "Climate-specific regret ($M; source)",
+    "Pairwise difference ($M; source)",
+    "Largest-regret reduction ($M)",
+    "Largest-regret reduction (%)",
+    "Best climate-specific portfolio",
+    "Best climate-specific worst-case regret ($M)",
+    "Value of robust planning ($M)",
+    "Value of robust planning (%)",
+]
 
 
-def read_csv(path: Path) -> List[dict]:
-    if not path.exists():
-        raise FileNotFoundError(f"Required file not found: {path}")
-    with path.open("r", encoding="utf-8-sig", newline="") as f:
-        return list(csv.DictReader(f))
+def read_csv(path: Path) -> list[dict[str, str]]:
+    with path.open(encoding="utf-8-sig", newline="") as f:
+        rows = list(csv.DictReader(f))
+    if not rows:
+        raise ValueError(f"Empty CSV file: {path}")
+    return rows
 
 
-def as_float(value, name: str) -> float:
-    try:
-        x = float(value)
-    except (TypeError, ValueError):
-        raise ValueError(f"Invalid {name}: {value!r}")
-    if not math.isfinite(x):
-        raise ValueError(f"Invalid {name}: {value!r}")
-    return x
-
-
-def parse_budget_dir(path: Path) -> Optional[int]:
-    m = re.fullmatch(r"B(\d+)", path.name)
-    return int(m.group(1)) if m else None
-
-
-def close_eps(a: float, b: float) -> bool:
-    return math.isclose(a, b, rel_tol=0.0, abs_tol=1e-5)
-
-
-def robust_file_prefix(budget: int) -> str:
-    """Return the file prefix used by minimax_regret_analysis.py (e.g., B50)."""
-    millions = budget / 1_000_000
-    if math.isclose(millions, round(millions), abs_tol=1e-12):
-        return f"B{int(round(millions))}"
-    return f"B{millions:g}"
-
-
-def climate_performance_path(robust_budget_dir: Path, budget: int) -> Path:
-    """
-    Resolve the robust climate-performance CSV.
-
-    Current robust runs use names such as
-        B50_climate_performance.csv
-        B300_climate_performance.csv
-        B600_climate_performance.csv
-    inside directories B50000000, B300000000, and B600000000.
-
-    The legacy unprefixed name is retained as a fallback.
-    """
-    candidates = [
-        robust_budget_dir / f"{robust_file_prefix(budget)}_climate_performance.csv",
-        robust_budget_dir / "climate_performance.csv",
-        robust_budget_dir / f"B{budget}_climate_performance.csv",
-    ]
+def locate_result(folder: Path, stem: str, budget_m: int) -> Path:
+    candidates = (folder / f"{stem}.csv", folder / f"B{budget_m}_{stem}.csv")
     for path in candidates:
         if path.is_file():
             return path
-
-    matches = sorted(robust_budget_dir.glob("*_climate_performance.csv"))
-    if len(matches) == 1:
-        return matches[0]
-    if len(matches) > 1:
-        raise ValueError(
-            f"Multiple climate-performance CSVs found in {robust_budget_dir}: "
-            f"{[p.name for p in matches]}"
-        )
-
+    # Case-insensitive fallback for files synchronized across operating systems.
+    if folder.is_dir():
+        existing = {p.name.casefold(): p for p in folder.iterdir() if p.is_file()}
+        for path in candidates:
+            if path.name.casefold() in existing:
+                return existing[path.name.casefold()]
     raise FileNotFoundError(
-        f"No climate-performance CSV found in {robust_budget_dir}. "
-        f"Expected {robust_file_prefix(budget)}_climate_performance.csv "
-        f"(or legacy climate_performance.csv)."
+        f"Cannot find {stem} for ${budget_m}M inside {folder}. "
+        f"Expected {candidates[0].name} or {candidates[1].name}."
     )
 
 
-def discover_robust_budgets(robust_output_dir: Path) -> List[int]:
-    budgets = []
-    if not robust_output_dir.is_dir():
-        raise FileNotFoundError(f"Robust output directory not found: {robust_output_dir}")
+def finite(row: dict[str, str], col: str, desc: str) -> Decimal:
+    """Read original decimal text directly, avoiding binary-float artifacts."""
+    try:
+        val = Decimal(row[col].strip())
+    except (KeyError, AttributeError, InvalidOperation) as exc:
+        raise ValueError(f"{desc}: missing/invalid '{col}': {row.get(col)!r}") from exc
+    if not val.is_finite():
+        raise ValueError(f"{desc}: non-finite value in '{col}'")
+    return val
 
-    for p in robust_output_dir.iterdir():
-        if not p.is_dir():
-            continue
-        B = parse_budget_dir(p)
-        if B is None:
-            continue
+
+def transfer_data(root: Path, folder: Path, budget_m: int) -> dict[tuple[str, str], dict[str, str]]:
+    """Source-to-target cost/benchmark from original cross-evaluations.
+
+    Prefer per-budget output when available, since that was exported by the same
+    run. Otherwise read the original consolidated cross-evaluation CSV.
+    """
+    try:
+        local_path = locate_result(folder, "reference_cross_climate_comparison", budget_m)
+    except FileNotFoundError:
+        local_path = None
+
+    if local_path is not None:
+        original_rows = read_csv(local_path)
+        rows = [{
+            "source_scenario": r.get("source", ""),
+            "target_scenario": r.get("target", ""),
+            "fixed_f1": r.get("historical_Q1", ""),
+            "benchmark_f1": r.get("historical_matched_benchmark", ""),
+        } for r in original_rows]
+    else:
+        path = root / "output" / "cross_eval" / "summary_fixed_policy_eval.csv"
+        if not path.is_file():
+            raise FileNotFoundError(f"Missing both local cross-evaluation CSV and {path}")
+        rows = [r for r in read_csv(path) if abs(
+            finite(r, "Budget" if "Budget" in r else "budget", "cross evaluation")
+            - Decimal(budget_m) * MILLION
+        ) <= Decimal("0.5")]
+
+    expected = {(s, t) for s in CLIMATES for t in CLIMATES if s != t}
+    indexed: dict[tuple[str, str], dict[str, str]] = {}
+    for row in rows:
+        key = (row.get("source_scenario", "").strip(), row.get("target_scenario", "").strip())
+        if key in indexed:
+            raise ValueError(f"${budget_m}M: duplicate cross-evaluation {key}")
+        indexed[key] = row
+    if set(indexed) != expected:
+        raise ValueError(f"${budget_m}M: expected all 6 transfers; "
+                         f"missing={expected - set(indexed)}, extra={set(indexed) - expected}")
+    return indexed
+
+
+def robust_data(folder: Path, budget_m: int) -> dict[str, Decimal]:
+    perf_path = locate_result(folder, "climate_performance", budget_m)
+    rows = read_csv(perf_path)
+    regrets = {}
+    for row in rows:
+        target = row.get("climate", "").strip()
+        if target not in CLIMATES:
+            raise ValueError(f"${budget_m}M: invalid climate {target!r}")
+        if target in regrets:
+            raise ValueError(f"${budget_m}M: repeated climate {target}")
         try:
-            climate_performance_path(p, B)
-        except FileNotFoundError:
-            continue
-        budgets.append(B)
-
-    return sorted(set(budgets))
-
-
-def selected_source_eps(robust_budget_dir: Path, budget: int) -> Dict[str, float]:
-    """
-    Read the source epsilon values actually used by the robust run.
-    This prevents stale cross_eval files from a previous representative
-    portfolio from being mixed into the value-of-robustness calculation.
-    """
-    rows = read_csv(robust_budget_dir / "selection_log.csv")
-    selected: Dict[str, float] = {}
-
-    for row in rows:
-        climate = row.get("climate", "").strip()
-        if climate not in CLIMATES:
-            continue
-
-        row_budget = int(round(as_float(row.get("budget"), "selection_log budget")))
-        if row_budget != budget:
-            raise ValueError(
-                f"Budget mismatch in {robust_budget_dir / 'selection_log.csv'}: "
-                f"expected {budget}, found {row_budget}."
-            )
-
-        eps = as_float(row.get("epsilon"), "selection_log epsilon")
-        if climate in selected and not close_eps(selected[climate], eps):
-            raise ValueError(
-                f"Multiple selected epsilon values for {climate}, B={budget}."
-            )
-        selected[climate] = eps
-
-    missing = set(CLIMATES) - set(selected)
-    if missing:
-        raise ValueError(
-            f"Missing climates in {robust_budget_dir / 'selection_log.csv'}: "
-            f"{sorted(missing)}"
-        )
-    return selected
+            value = finite(row, "fixed_reference_regret_estimate", "robust")
+        except ValueError:
+            value = finite(row, "Q1_upper", "robust") - finite(row, "b_used", "robust")
+        regrets[target] = value
+        if row.get("Q1_status") not in ("", "fixed_policy_solved"):
+            print(f"WARNING: ${budget_m}M {target} has Q1_status={row['Q1_status']}; "
+                  "regret may be only an upper bound.")
+    if set(regrets) != set(CLIMATES):
+        raise ValueError(f"${budget_m}M: missing robust results for {set(CLIMATES)-set(regrets)}")
+    return regrets
 
 
-def climate_specific_worst_cases(
-    cross_rows: List[dict],
-    budget: int,
-    selected_eps: Dict[str, float],
-) -> Dict[str, float]:
-    """
-    For each source climate-specific portfolio, calculate its worst-case
-    matched-frontier regret across the three climates.
-
-    The source-climate (diagonal) regret is zero because that portfolio lies
-    on its own source-climate frontier, so the maximum is determined from the
-    two off-diagonal cross-evaluations.
-    """
-    budget_rows = []
-    for row in cross_rows:
-        row_budget = int(
-            round(
-                as_float(
-                    row.get("Budget", row.get("budget")),
-                    "cross-eval budget",
-                )
-            )
-        )
-        if row_budget == budget:
-            budget_rows.append(row)
-
-    worst: Dict[str, float] = {}
-
-    for source in CLIMATES:
-        expected_targets = set(CLIMATES) - {source}
-        eps = selected_eps[source]
-
-        matched = [
-            r
-            for r in budget_rows
-            if r.get("source_scenario", "").strip() == source
-            and r.get("target_scenario", "").strip() in expected_targets
-            and close_eps(as_float(r.get("source_eps"), "source_eps"), eps)
-        ]
-
-        targets = [r.get("target_scenario", "").strip() for r in matched]
-        if len(matched) != 2 or set(targets) != expected_targets:
-            raise ValueError(
-                f"B={budget}, source={source}: expected exactly one cross-evaluation "
-                f"for each target {sorted(expected_targets)} using source_eps={eps}, "
-                f"but found targets={targets}."
-            )
-
-        regrets = [0.0]
-        for row in matched:
-            fixed_f1 = as_float(row.get("fixed_f1"), "fixed_f1")
-            benchmark_f1 = as_float(row.get("benchmark_f1"), "benchmark_f1")
-            regret = fixed_f1 - benchmark_f1
-
-            tol = 1e-7 * max(1.0, abs(fixed_f1), abs(benchmark_f1))
-            if regret < -tol:
-                raise ValueError(
-                    f"Negative matched-frontier regret for B={budget}, "
-                    f"{source}->{row.get('target_scenario')}: {regret}"
-                )
-            regrets.append(max(0.0, regret))
-
-        worst[source] = max(regrets)
-
-    return worst
+def decimal_text(value: Decimal) -> str:
+    """Show all available decimal places, excluding only redundant trailing zeros."""
+    if value == 0:
+        return "0"
+    text = format(value, "f")  # fixed notation, even for scientific-notation CSV input
+    return text.rstrip("0").rstrip(".") if "." in text else text
 
 
-def robust_worst_case(robust_budget_dir: Path, budget: int) -> float:
-    performance_csv = climate_performance_path(robust_budget_dir, budget)
-    rows = read_csv(performance_csv)
-    by_climate = {}
+def format_m(value_dollars: Decimal) -> str:
+    """Convert source dollars to millions EXACTLY, preserving source digits."""
+    return f"{decimal_text(value_dollars / MILLION)}M"
 
-    for row in rows:
-        climate = row.get("climate", "").strip()
-        if climate not in CLIMATES:
-            continue
 
-        value = row.get("matched_regret_estimate")
-        if value in (None, ""):
-            raise ValueError(
-                f"B={budget}, climate={climate}: matched_regret_estimate is missing. "
-                "Run minimax_regret_analysis.py with matched evaluation enabled."
-            )
-        by_climate[climate] = as_float(value, "matched_regret_estimate")
+def format_pct(numerator: Decimal, denominator: Decimal, decimals: int) -> str:
+    """Ratios may repeat forever; report up to requested fractional digits."""
+    if abs(denominator) <= Decimal("1e-9"):
+        return "N/A"
+    percentage = Decimal(100) * numerator / denominator
+    displayed = format(percentage, f".{decimals}f")
+    if "." in displayed:
+        displayed = displayed.rstrip("0").rstrip(".")
+    return f"{displayed}%"
 
-    missing = set(CLIMATES) - set(by_climate)
-    if missing:
-        raise ValueError(
-            f"B={budget}: {performance_csv.name} is missing robust matched-regret "
-            f"results for {sorted(missing)}."
+
+def build_budget(
+    root: Path, robust_root: Path, budget_m: int, percent_decimals: int = 15,
+) -> list[dict[str, str]]:
+    folder = robust_root / f"B{budget_m * 1_000_000}"
+    transfers = transfer_data(root, folder, budget_m)
+    robust = robust_data(folder, budget_m)
+
+    specific: dict[tuple[str, str], Decimal] = {}
+    for (source, target), record in transfers.items():
+        specific[source, target] = (
+            finite(record, "fixed_f1", f"{source}->{target}")
+            - finite(record, "benchmark_f1", f"{source}->{target}")
         )
 
-    return max(by_climate.values())
+    # Source portfolios are judged by their MAXIMUM transfer regret across
+    # the OTHER TWO climates, not by their minimum pairwise regret.
+    worst_case_by_source = {
+        source: max(specific[source, target] for target in CLIMATES if target != source)
+        for source in CLIMATES
+    }
+    best_source = min(CLIMATES, key=lambda s: worst_case_by_source[s])
+    best_specific_worst_case = worst_case_by_source[best_source]
 
+    largest_specific = max(specific.values())
+    largest_robust = max(robust.values())
+    largest_reduction = largest_specific - largest_robust
+    value_of_robust = best_specific_worst_case - largest_robust
 
-def compute_rows(
-    cross_eval_csv: Path,
-    robust_output_dir: Path,
-    requested_budgets: Optional[set[int]],
-) -> List[dict]:
-    cross_rows = read_csv(cross_eval_csv)
-    robust_budgets = discover_robust_budgets(robust_output_dir)
-
-    if requested_budgets is not None:
-        missing = requested_budgets - set(robust_budgets)
-        if missing:
-            raise ValueError(
-                "Requested budgets have no robust climate-performance CSV "
-                f"(e.g., B50_climate_performance.csv): {sorted(missing)}"
+    rows: list[dict[str, str]] = []
+    for target in CLIMATES:
+        source_regrets: list[str] = []
+        differences: list[str] = []
+        for source in SOURCE_ORDER[target]:
+            source_regrets.append(
+                f"{format_m(specific[source, target])} ({SOURCE_CODES[source]})"
             )
-        robust_budgets = [B for B in robust_budgets if B in requested_budgets]
-
-    if not robust_budgets:
-        raise ValueError(
-            f"No available robust budgets found under {robust_output_dir}. "
-            "Expected folders such as B50000000 containing files such as "
-            "B50_climate_performance.csv."
-        )
-
-    result = []
-    for B in robust_budgets:
-        robust_dir = robust_output_dir / f"B{B}"
-        eps = selected_source_eps(robust_dir, B)
-        reference_worst = climate_specific_worst_cases(cross_rows, B, eps)
-
-        best_reference = min(reference_worst.values())
-        best_reference_sources = [
-            climate
-            for climate, value in reference_worst.items()
-            if math.isclose(value, best_reference, rel_tol=0.0, abs_tol=1e-6)
-        ]
-
-        robust_worst = robust_worst_case(robust_dir, B)
-        value = best_reference - robust_worst
-
-        result.append(
-            {
-                "Budget": B,
-                "ssp245_worst_regret": reference_worst["ssp245"],
-                "main_worst_regret": reference_worst["main"],
-                "perc_worst_regret": reference_worst["perc"],
-                "best_reference_source": ";".join(best_reference_sources),
-                "best_reference_worst_regret": best_reference,
-                "robust_worst_regret": robust_worst,
-                "V_B": value,
-                "V_B_over_best_reference_pct": (
-                    100.0 * value / best_reference
-                    if best_reference > 0.0
-                    else None
-                ),
-                "V_B_over_B_pct": 100.0 * value / B,
-            }
-        )
-
-    return result
-
-
-def write_audit_csv(path: Path, records: List[dict]) -> None:
-    path.parent.mkdir(parents=True, exist_ok=True)
-    with path.open("w", newline="", encoding="utf-8") as f:
-        writer = csv.DictWriter(f, fieldnames=list(records[0].keys()))
-        writer.writeheader()
-        writer.writerows(records)
-
-
-def annotate_reduction(
-    ax,
-    x: float,
-    y_best: float,
-    y_robust: float,
-    reduction: float,
-) -> None:
-    """
-    Draw a vertical connector between the robust point and the best
-    climate-specific reference point and annotate the absolute reduction.
-
-    Inputs are already in millions of dollars.
-    """
-    ax.annotate(
-        "",
-        xy=(x, y_best),
-        xytext=(x, y_robust),
-        arrowprops={
-            "arrowstyle": "<->",
-            "linewidth": 1.0,
-            "shrinkA": 2,
-            "shrinkB": 2,
-        },
-    )
-
-    midpoint = 0.5 * (y_best + y_robust)
-    ax.annotate(
-        rf"\${reduction:.0f}M",
-        xy=(x, midpoint),
-        xytext=(5, 0),
-        textcoords="offset points",
-        ha="left",
-        va="center",
-        fontsize=8,
-    )
-
-
-def make_two_panel_figure(records: List[dict], output_path: Path) -> None:
-    """
-    Create the two-panel value-of-robustness figure.
-
-    Panel A:
-      - three climate-specific worst-case-regret series;
-      - climate-robust worst-case-regret series;
-      - a vertical connector from the robust point to the best climate-specific
-        reference at each budget, annotated with the absolute regret reduction.
-
-    Panel B:
-      - regret reduction relative to the best climate-specific reference;
-      - regret reduction relative to the mitigation budget.
-    """
-    records = sorted(records, key=lambda r: int(r["Budget"]))
-    budgets_m = [r["Budget"] / 1_000_000 for r in records]
-
-    fig, (ax_a, ax_b) = plt.subplots(
-        1,
-        2,
-        figsize=(12.5, 5.2),
-        constrained_layout=True,
-    )
-
-    # Panel A
-    for climate in CLIMATES:
-        ys = [r[f"{climate}_worst_regret"] / 1_000_000 for r in records]
-        ax_a.plot(
-            budgets_m,
-            ys,
-            marker=PLOT_MARKERS[climate],
-            linewidth=1.8,
-            markersize=5,
-            label=DISPLAY_NAMES[climate],
-        )
-
-    robust_ys = [r["robust_worst_regret"] / 1_000_000 for r in records]
-    ax_a.plot(
-        budgets_m,
-        robust_ys,
-        marker=PLOT_MARKERS["robust"],
-        linewidth=2.2,
-        markersize=5.5,
-        label="Climate-robust",
-    )
-
-    for r in records:
-        x = r["Budget"] / 1_000_000
-        y_best = r["best_reference_worst_regret"] / 1_000_000
-        y_robust = r["robust_worst_regret"] / 1_000_000
-        reduction = r["V_B"] / 1_000_000
-        annotate_reduction(ax_a, x, y_best, y_robust, reduction)
-
-    ax_a.set_xlabel("Mitigation budget (million $)")
-    ax_a.set_ylabel("Worst-case matched-frontier regret (million $)")
-    ax_a.set_ylim(bottom=0)
-    ax_a.set_xticks(budgets_m)
-    ax_a.grid(axis="y", alpha=0.25)
-    ax_a.legend(frameon=False, fontsize=8)
-    ax_a.text(
-        -0.12,
-        1.04,
-        "A",
-        transform=ax_a.transAxes,
-        fontsize=12,
-        fontweight="bold",
-        va="top",
-    )
-
-    # Panel B
-    pct_best = [r["V_B_over_best_reference_pct"] for r in records]
-    pct_budget = [r["V_B_over_B_pct"] for r in records]
-
-    ax_b.plot(
-        budgets_m,
-        pct_best,
-        marker="o",
-        linewidth=1.8,
-        markersize=5,
-        label="Reduction relative to best reference",
-    )
-    ax_b.plot(
-        budgets_m,
-        pct_budget,
-        marker="s",
-        linewidth=1.8,
-        markersize=5,
-        label="Reduction relative to budget",
-    )
-
-    for x, y in zip(budgets_m, pct_best):
-        if y is not None and math.isfinite(y):
-            ax_b.annotate(
-                f"{y:.1f}%",
-                xy=(x, y),
-                xytext=(0, 7),
-                textcoords="offset points",
-                ha="center",
-                va="bottom",
-                fontsize=8,
+            differences.append(
+                f"{format_m(specific[source, target] - robust[target])} "
+                f"({SOURCE_CODES[source]})"
             )
 
-    for x, y in zip(budgets_m, pct_budget):
-        if y is not None and math.isfinite(y):
-            ax_b.annotate(
-                f"{y:.1f}%",
-                xy=(x, y),
-                xytext=(0, 7),
-                textcoords="offset points",
-                ha="center",
-                va="bottom",
-                fontsize=8,
-            )
+        row = {name: "" for name in HEADERS}
+        row.update({
+            "Budget ($M)": f"{budget_m}M",
+            "Target climate": CLIMATE_NAMES[target],
+            "Robust regret ($M)": format_m(robust[target]),
+            "Climate-specific regret ($M; source)": "; ".join(source_regrets),
+            "Pairwise difference ($M; source)": "; ".join(differences),
+        })
+        rows.append(row)
 
-    ax_b.set_xlabel("Mitigation budget (million $)")
-    ax_b.set_ylabel("Regret reduction (%)")
-    ax_b.set_ylim(bottom=0)
-    ax_b.set_xticks(budgets_m)
-    ax_b.grid(axis="y", alpha=0.25)
-    ax_b.legend(frameon=False, fontsize=8)
-    ax_b.text(
-        -0.12,
-        1.04,
-        "B",
-        transform=ax_b.transAxes,
-        fontsize=12,
-        fontweight="bold",
-        va="top",
-    )
-
-    output_path.parent.mkdir(parents=True, exist_ok=True)
-    save_kwargs = {"bbox_inches": "tight"}
-
-    if output_path.suffix.lower() in {".png", ".jpg", ".jpeg", ".tif", ".tiff"}:
-        save_kwargs["dpi"] = 300
-
-    fig.savefig(output_path, **save_kwargs)
-    plt.close(fig)
+    # Fill group-level columns once per budget, as in the photographed table.
+    rows[0].update({
+        "Largest-regret reduction ($M)": format_m(largest_reduction),
+        "Largest-regret reduction (%)": format_pct(
+            largest_reduction, largest_specific, percent_decimals
+        ),
+        "Best climate-specific portfolio": SOURCE_CODES[best_source],
+        "Best climate-specific worst-case regret ($M)": format_m(
+            best_specific_worst_case
+        ),
+        "Value of robust planning ($M)": format_m(value_of_robust),
+        "Value of robust planning (%)": format_pct(
+            value_of_robust, best_specific_worst_case, percent_decimals
+        ),
+    })
+    return rows
 
 
 def main() -> None:
-    p = argparse.ArgumentParser(
-        description=(
-            "Compute the incremental value of climate-robust planning from "
-            "cross-climate matched-frontier evaluations and robust "
-            "matched-frontier evaluations. Writes a CSV and a two-panel figure."
-        )
-    )
-    p.add_argument("--base_output_dir", default="output")
-    p.add_argument(
-        "--cross_eval_csv",
-        default=None,
-        help="Default: <base_output_dir>/cross_eval/summary_fixed_policy_eval.csv",
-    )
-    p.add_argument(
-        "--robust_output_dir",
-        default=None,
-        help="Default: <base_output_dir>/minimax_regret_fixed_reference",
-    )
-    p.add_argument(
-        "--output_csv",
-        default=None,
-        help="Default: <base_output_dir>/value_of_robustness.csv",
-    )
-    p.add_argument(
-        "--output_figure",
-        default=None,
-        help="Default: <base_output_dir>/value_of_robustness_two_panel.png",
-    )
-    p.add_argument(
-        "--budgets",
-        nargs="+",
-        type=int,
-        default=None,
-        help=(
-            "Optional budget filter, e.g. "
-            "--budgets 50000000 200000000 300000000 400000000 600000000"
-        ),
-    )
-    args = p.parse_args()
+    parser = argparse.ArgumentParser(description="Write one regret comparison CSV, no other outputs")
+    parser.add_argument("--project-root", type=Path, default=Path.cwd())
+    parser.add_argument("--budgets", nargs="+", type=int, default=list(BUDGETS_M),
+                        help="Budgets in millions; default 50 100 200 300 400 500 600 800")
+    parser.add_argument("--skip-missing", action="store_true",
+                        help="If some budget inputs are absent, create a partial CSV")
+    parser.add_argument("--percent-decimals", type=int, default=15,
+                        help="Maximum fractional digits for percentage ratios (default: 15)")
+    args = parser.parse_args()
+    project = args.project_root.expanduser().resolve()
+    robust_root = project / "output" / "minimax_regret_fixed_reference"
+    output = robust_root / "regret_reduction_table.csv"
 
-    base = Path(args.base_output_dir)
-    cross_eval_csv = (
-        Path(args.cross_eval_csv)
-        if args.cross_eval_csv
-        else base / "cross_eval" / "summary_fixed_policy_eval.csv"
-    )
-    robust_output_dir = (
-        Path(args.robust_output_dir)
-        if args.robust_output_dir
-        else base / "minimax_regret_fixed_reference"
-    )
-    output_csv = (
-        Path(args.output_csv)
-        if args.output_csv
-        else base / "value_of_robustness.csv"
-    )
-    output_figure = (
-        Path(args.output_figure)
-        if args.output_figure
-        else base / "value_of_robustness_two_panel.png"
-    )
-    requested = set(args.budgets) if args.budgets else None
+    if len(set(args.budgets)) != len(args.budgets) or any(x <= 0 for x in args.budgets):
+        parser.error("Budgets must be distinct positive integers in millions")
 
-    records = compute_rows(cross_eval_csv, robust_output_dir, requested)
-    write_audit_csv(output_csv, records)
-    make_two_panel_figure(records, output_figure)
+    if not 0 <= args.percent_decimals <= 50:
+        parser.error("Percentage decimal places must be between 0 and 50")
 
-    print(f"[SAVED] {output_csv}")
-    print(f"[SAVED] {output_figure}")
+    # Decimal calculations use a high precision and derive values directly
+    # from the CSV's decimal strings, never from IEEE floating-point numbers.
+    result_rows = []
+    for budget in args.budgets:
+        try:
+            result_rows.extend(build_budget(
+                project, robust_root, budget, args.percent_decimals
+            ))
+        except (OSError, ValueError) as exc:
+            if not args.skip_missing:
+                parser.exit(1, f"ERROR: {exc}\nNo CSV written. "
+                               "Use --skip-missing only if a partial table is acceptable.\n")
+            print(f"SKIPPED ${budget}M: {exc}")
+
+    if not result_rows:
+        parser.exit(1, "ERROR: No budgets processed. No CSV written.\n")
+    output.parent.mkdir(parents=True, exist_ok=True)
+    with output.open("w", encoding="utf-8-sig", newline="") as f:
+        writer = csv.DictWriter(f, fieldnames=HEADERS)
+        writer.writeheader()
+        writer.writerows(result_rows)
+    print(f"CSV saved: {output}")
 
 
 if __name__ == "__main__":
-    main()
+    with localcontext() as ctx:
+        ctx.prec = DECIMAL_PRECISION
+        main()
